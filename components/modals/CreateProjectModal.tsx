@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { HelpCircle, ChevronDown, Sparkles, Github } from "lucide-react"
+import { HelpCircle, ChevronDown, Sparkles, GitBranch, Server, Shield, Database, Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 export type ProjectFormData = {
@@ -120,8 +120,9 @@ export function CreateProjectModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      {/* Full width and full height modal */}
+      <DialogContent className="max-w-5xl w-full p-6 flex flex-col h-full">
+        <DialogHeader className="flex-shrink-0">
           <DialogTitle className="text-xl">Create a new project</DialogTitle>
           <DialogDescription>
             Your project will have its own dedicated instance and full Postgres database.
@@ -129,248 +130,266 @@ export function CreateProjectModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 py-4">
-          {/* Organization */}
-          <div className="space-y-2">
-            <Label>Organization</Label>
-            <Select
-              value={formData.organization}
-              onValueChange={(value) => setFormData({ ...formData, organization: value })}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select organization" />
-              </SelectTrigger>
-              <SelectContent>
-                {organizations.map((org) => (
-                  <SelectItem key={org.id} value={org.id}>
-                    <div className="flex items-center justify-between w-full gap-4">
-                      <span>{org.name}</span>
-                      <span className="text-xs text-muted-foreground">{org.plan}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {selectedOrg && (
-              <p className="text-xs text-muted-foreground flex items-center gap-1">
-                <span>Plan: {selectedOrg.plan}</span>
-              </p>
-            )}
-          </div>
-
-          {/* GitHub Integration */}
-          <div className="space-y-2">
-            <Label>GitHub (optional)</Label>
-            <Button
-              type="button"
-              variant="outline"
-              className={cn(
-                "w-full justify-start gap-2",
-                formData.githubConnected && "border-green-500 bg-green-50"
-              )}
-              onClick={() => setFormData({ ...formData, githubConnected: !formData.githubConnected })}
-            >
-              <Github className="h-4 w-4" />
-              {formData.githubConnected ? "Connected to GitHub" : "Connect GitHub"}
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              Ideal for agent-first workflows: update your schema in code, push it to GitHub,
-              and Supabase deploys the changes automatically.
-            </p>
-            {formData.githubConnected && (
-              <Input
-                placeholder="Repository name (e.g., username/repo)"
-                value={formData.githubRepo}
-                onChange={(e) => setFormData({ ...formData, githubRepo: e.target.value })}
-                className="mt-2"
-              />
-            )}
-          </div>
-
-          {/* Project Name */}
-          <div className="space-y-2">
-            <Label htmlFor="project-name">Project name</Label>
-            <Input
-              id="project-name"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="Project name"
-              autoFocus
-            />
-          </div>
-
-          {/* Database Password */}
-          <div className="space-y-2">
-            <Label htmlFor="db-password">Database password</Label>
-            <div className="flex gap-2">
-              <Input
-                id="db-password"
-                type="password"
-                value={formData.databasePassword}
-                onChange={(e) => setFormData({ ...formData, databasePassword: e.target.value })}
-                placeholder="Type in a strong password"
-                className="flex-1"
-              />
-              <Button type="button" variant="outline" onClick={generateStrongPassword} className="gap-1">
-                <Sparkles className="h-4 w-4" />
-                Generate
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              This is the password to your Postgres database, so it must be strong and hard to guess.
-            </p>
-            {generatedPassword && (
-              <div className="mt-2 p-2 bg-muted rounded-md">
-                <p className="text-xs font-mono break-all">{generatedPassword}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Region */}
-          <div className="space-y-2">
-            <Label>Region</Label>
-            <Select
-              value={formData.region}
-              onValueChange={(value) => setFormData({ ...formData, region: value })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(
-                  regions.reduce((acc, region) => {
-                    if (!acc[region.group]) acc[region.group] = []
-                    acc[region.group].push(region)
-                    return acc
-                  }, {} as Record<string, typeof regions>)
-                ).map(([group, groupRegions]) => (
-                  <div key={group}>
-                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                      {group}
-                    </div>
-                    {groupRegions.map((region) => (
-                      <SelectItem key={region.value} value={region.value}>
-                        <div className="flex items-center gap-2">
-                          <span>{region.label}</span>
-                          {region.recommended && (
-                            <span className="text-xs text-green-600">Recommended</span>
-                          )}
+        {/* Scrollable form area */}
+        <div className="flex-1 overflow-y-auto py-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* LEFT COLUMN */}
+            <div className="space-y-5 pr-4">
+              {/* Organization */}
+              <div className="space-y-2">
+                <Label>Organization</Label>
+                <Select value={formData.organization} onValueChange={(value) => setFormData({ ...formData, organization: value })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {organizations.map((org) => (
+                      <SelectItem key={org.id} value={org.id}>
+                        <div className="flex justify-between w-full">
+                          <span>{org.name}</span>
+                          <span className="text-xs text-muted-foreground">{org.plan}</span>
                         </div>
                       </SelectItem>
                     ))}
+                  </SelectContent>
+                </Select>
+                {selectedOrg && (
+                  <p className="text-xs text-muted-foreground">Plan: {selectedOrg.plan}</p>
+                )}
+              </div>
+
+              {/* Project Name */}
+              <div className="space-y-2">
+                <Label htmlFor="project-name">Project name</Label>
+                <Input
+                  id="project-name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="e.g., my-awesome-project"
+                />
+              </div>
+
+              {/* Database Password */}
+              <div className="space-y-2">
+                <Label htmlFor="db-password">Database password</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="db-password"
+                    type="password"
+                    value={formData.databasePassword}
+                    onChange={(e) => setFormData({ ...formData, databasePassword: e.target.value })}
+                    placeholder="Enter a strong password"
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="outline" onClick={generateStrongPassword} size="sm">
+                    <Sparkles className="h-4 w-4 mr-1" />
+                    Generate
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  This is the password to your Postgres database, so it must be strong and hard to guess.
+                </p>
+                {generatedPassword && (
+                  <div className="mt-2 p-2 bg-muted rounded-md">
+                    <p className="text-xs font-mono break-all">{generatedPassword}</p>
                   </div>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Select the region closest to your users for the best performance.
-            </p>
-          </div>
+                )}
+              </div>
 
-          {/* Security Section */}
-          <div className="space-y-3">
-            <Label>Security</Label>
-
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm font-normal">Enable Data API</Label>
+              {/* Region */}
+              <div className="space-y-2">
+                <Label>Region</Label>
+                <Select value={formData.region} onValueChange={(value) => setFormData({ ...formData, region: value })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(
+                      regions.reduce((acc, region) => {
+                        if (!acc[region.group]) acc[region.group] = []
+                        acc[region.group].push(region)
+                        return acc
+                      }, {} as Record<string, typeof regions>)
+                    ).map(([group, groupRegions]) => (
+                      <div key={group}>
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
+                          {group}
+                        </div>
+                        {groupRegions.map((region) => (
+                          <SelectItem key={region.value} value={region.value}>
+                            <div className="flex items-center gap-2">
+                              <span>{region.label}</span>
+                              {region.recommended && (
+                                <span className="text-xs text-green-600">Recommended</span>
+                              )}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </div>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <p className="text-xs text-muted-foreground">
-                  Autogenerate a RESTful API for your public schema.
+                  Select the region closest to your users for the best performance.
                 </p>
               </div>
-              <Switch
-                checked={formData.dataApiEnabled}
-                onCheckedChange={(checked: boolean) => setFormData({ ...formData, dataApiEnabled: checked })}
-              />
-            </div>
 
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm font-normal">Automatically expose new tables</Label>
-                <p className="text-xs text-muted-foreground">
-                  Grants privileges to Data API roles by default, exposing new tables.
-                </p>
-              </div>
-              <Switch
-                checked={formData.autoExposeTables}
-                onCheckedChange={(checked: boolean) => setFormData({ ...formData, autoExposeTables: checked })}
-              />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <Label className="text-sm font-normal">Enable automatic RLS</Label>
-                <p className="text-xs text-muted-foreground">
-                  Create an event trigger that automatically enables Row Level Security on all new tables.
-                </p>
-              </div>
-              <Switch
-                checked={formData.autoRLS}
-                onCheckedChange={(checked: boolean) => setFormData({ ...formData, autoRLS: checked })}
-              />
-            </div>
-          </div>
-
-          {/* Advanced Configuration */}
-          <div>
-            <Button
-              type="button"
-              variant="ghost"
-              className="p-0 h-auto font-medium"
-              onClick={() => setShowAdvancedConfig(!showAdvancedConfig)}
-            >
-              <ChevronDown className={cn("h-4 w-4 mr-1 transition-transform", showAdvancedConfig && "rotate-180")} />
-              Advanced Configuration
-            </Button>
-            <p className="text-xs text-muted-foreground mt-1">
-              These settings cannot be changed after the project is created
-            </p>
-
-            {showAdvancedConfig && (
-              <div className="mt-4 space-y-4 pl-4 border-l-2 border-muted">
+              {/* Postgres Type */}
+              <div className="space-y-2">
+                <Label>Postgres Type</Label>
                 <div className="space-y-2">
-                  <Label>Postgres Type</Label>
-                  <div className="space-y-2">
-                    <label className="flex items-start gap-3 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="postgresType"
-                        value="postgres"
-                        checked={formData.postgresType === "postgres"}
-                        onChange={() => setFormData({ ...formData, postgresType: "postgres" })}
-                        className="mt-1 h-4 w-4"
-                      />
-                      <div>
-                        <div className="font-medium">Postgres</div>
-                        <div className="text-xs text-muted-foreground">
-                          Default. Recommended for production workloads
-                        </div>
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="postgresType"
+                      value="postgres"
+                      checked={formData.postgresType === "postgres"}
+                      onChange={() => setFormData({ ...formData, postgresType: "postgres" })}
+                      className="mt-0.5 h-4 w-4"
+                    />
+                    <div>
+                      <div className="font-medium text-sm">Postgres</div>
+                      <div className="text-xs text-muted-foreground">
+                        Default. Recommended for production workloads
                       </div>
-                    </label>
-                    <label className="flex items-start gap-3 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="postgresType"
-                        value="orioledb"
-                        checked={formData.postgresType === "orioledb"}
-                        onChange={() => setFormData({ ...formData, postgresType: "orioledb" })}
-                        className="mt-1 h-4 w-4"
-                      />
-                      <div>
-                        <div className="font-medium">Postgres with OrioleDB</div>
-                        <div className="text-xs text-muted-foreground">
-                          Alpha. Not recommended for production workloads
-                        </div>
+                    </div>
+                  </label>
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="postgresType"
+                      value="orioledb"
+                      checked={formData.postgresType === "orioledb"}
+                      onChange={() => setFormData({ ...formData, postgresType: "orioledb" })}
+                      className="mt-0.5 h-4 w-4"
+                    />
+                    <div>
+                      <div className="font-medium text-sm">Postgres with OrioleDB</div>
+                      <div className="text-xs text-muted-foreground">
+                        Alpha. Not recommended for production workloads
                       </div>
-                    </label>
-                  </div>
+                    </div>
+                  </label>
                 </div>
               </div>
-            )}
+            </div>
+
+            {/* RIGHT COLUMN */}
+            <div className="space-y-5 pl-4 border-l border-border">
+              {/* GitHub Integration */}
+              <div className="space-y-2">
+                <Label>GitHub Integration</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={cn(
+                    "w-full justify-start gap-2",
+                    formData.githubConnected && "border-green-500 bg-green-50"
+                  )}
+                  onClick={() => setFormData({ ...formData, githubConnected: !formData.githubConnected })}
+                >
+                  <GitBranch className="h-4 w-4" />
+                  {formData.githubConnected ? "Connected to GitHub" : "Connect GitHub"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Ideal for agent-first workflows: update your schema in code, push it to GitHub,
+                  and Supabase deploys the changes automatically.
+                </p>
+                {formData.githubConnected && (
+                  <Input
+                    placeholder="Repository name (e.g., username/repo)"
+                    value={formData.githubRepo}
+                    onChange={(e) => setFormData({ ...formData, githubRepo: e.target.value })}
+                    className="mt-2"
+                  />
+                )}
+              </div>
+
+              {/* Security Settings */}
+              <div className="space-y-3">
+                <Label>Security Settings</Label>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5 flex-1 pr-4">
+                    <Label className="text-sm font-normal">Enable Data API</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Autogenerate a RESTful API for your public schema.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.dataApiEnabled}
+                    onCheckedChange={(checked: boolean) => setFormData({ ...formData, dataApiEnabled: checked })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5 flex-1 pr-4">
+                    <Label className="text-sm font-normal">Auto expose new tables</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Grants privileges to Data API roles by default.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.autoExposeTables}
+                    onCheckedChange={(checked: boolean) => setFormData({ ...formData, autoExposeTables: checked })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5 flex-1 pr-4">
+                    <Label className="text-sm font-normal">Enable automatic RLS</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Enables Row Level Security on all new tables.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={formData.autoRLS}
+                    onCheckedChange={(checked: boolean) => setFormData({ ...formData, autoRLS: checked })}
+                  />
+                </div>
+              </div>
+
+              {/* Project Description */}
+              <div className="space-y-2">
+                <Label>Project Description (Optional)</Label>
+                <Textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Add a description for your project..."
+                  rows={3}
+                  className="resize-none"
+                />
+                <p className="text-xs text-muted-foreground">
+                  A brief description to help you identify this project later.
+                </p>
+              </div>
+
+              {/* Advanced Configuration */}
+              <div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="p-0 h-auto font-medium"
+                  onClick={() => setShowAdvancedConfig(!showAdvancedConfig)}
+                >
+                  <ChevronDown className={cn("h-4 w-4 mr-1 transition-transform", showAdvancedConfig && "rotate-180")} />
+                  Advanced Configuration
+                </Button>
+                <p className="text-xs text-muted-foreground mt-1">
+                  These settings cannot be changed after the project is created
+                </p>
+
+                {showAdvancedConfig && (
+                  <div className="mt-4 space-y-4 p-3 bg-muted/50 rounded-md">
+                    {/* Advanced config content */}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-shrink-0 mt-6">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>

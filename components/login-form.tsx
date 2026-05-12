@@ -25,18 +25,21 @@ export function LoginForm({
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(true) // Start with loading true
 
   // Check if user is already logged in on component mount
   useEffect(() => {
     const checkAuth = () => {
       const user = localStorage.getItem('user')
       const token = localStorage.getItem('authToken')
+      const isLoggedIn = localStorage.getItem('isLoggedIn')
       
-      if (user && token) {
+      // Check all authentication criteria
+      if (user && (token || isLoggedIn === "true")) {
         // User is already logged in, redirect to dashboard
-        router.push('/admin/dashboard')
+        router.replace('/admin/dashboard') // Use replace instead of push
       }
+      setIsLoading(false)
     }
     
     checkAuth()
@@ -46,59 +49,55 @@ export function LoginForm({
     e.preventDefault()
     setError("")
     setIsLoading(true)
-    
-    // Basic validation
+  
     if (!email || !password) {
       setError("Please fill in all fields")
       setIsLoading(false)
       return
     }
-
+  
     try {
-      // Example authentication check (replace with your actual auth logic)
-      // For demo purposes, we'll accept any non-empty email/password
-      // In production, replace this with your actual API call
-      
-      /*
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ email, password }),
       })
-      
-      if (!response.ok) {
-        throw new Error('Invalid credentials')
-      }
-      
+  
       const data = await response.json()
-      */
-      
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      // Store user data in localStorage
-      const userData = {
-        email: email,
-        name: email.split('@')[0], // Extract name from email
-        loginTime: new Date().toISOString(),
-        role: 'admin' // Add role if needed
+  
+      if (!response.ok) {
+        setError(data.error || "Login failed")
+        setIsLoading(false)
+        return
       }
+  
+      // Store both user and token (if returned from backend)
+      localStorage.setItem("user", JSON.stringify(data.user))
+      localStorage.setItem("isLoggedIn", "true")
       
-      // Generate a simple token (in production, use the token from your backend)
-      const token = btoa(`${email}:${Date.now()}`) // Simple encoding for demo
-      
-      localStorage.setItem('user', JSON.stringify(userData))
-      localStorage.setItem('authToken', token)
-      localStorage.setItem('isLoggedIn', 'true')
-      
-      // Redirect to dashboard
-      router.push('/admin/dashboard')
-      
+      // Store token if your backend returns one
+      if (data.token) {
+        localStorage.setItem("authToken", data.token)
+      }
+  
+      // Use replace to prevent back button issues
+      router.replace("/admin/dashboard")
+  
     } catch (err) {
-      setError("Invalid email or password. Please try again.")
-    } finally {
+      setError("Server error. Please try again.")
       setIsLoading(false)
     }
+  }
+
+  // Show nothing while checking authentication
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="text-center">Loading...</div>
+      </div>
+    )
   }
 
   return (
