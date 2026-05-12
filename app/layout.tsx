@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter } from "next/font/google";
+import { Toaster } from "sonner"; // Add this import
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
-const inter = Inter({subsets:['latin'],variable:'--font-sans'});
+const inter = Inter({subsets:['latin'], variable:'--font-sans'});
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,6 +36,16 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         {children}
+        {/* Add Toaster component here */}
+        <Toaster 
+          position="top-right" 
+          richColors 
+          expand={false}
+          closeButton
+          toastOptions={{
+            duration: 3000,
+          }}
+        />
       </body>
     </html>
   );

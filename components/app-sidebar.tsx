@@ -16,7 +16,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { LayoutDashboardIcon, ListIcon, ChartBarIcon, FolderIcon, UsersIcon, CameraIcon, FileTextIcon, Settings2Icon, CircleHelpIcon, SearchIcon, DatabaseIcon, FileChartColumnIcon, FileIcon, CommandIcon, ServerIcon } from "lucide-react"
+import { LayoutDashboardIcon, ListIcon, ChartBarIcon, FolderIcon, UsersIcon, CameraIcon, FileTextIcon, Settings2Icon, CircleHelpIcon, SearchIcon, DatabaseIcon, FileChartColumnIcon, FileIcon, CommandIcon, ServerIcon, UserIcon, CircleUserRoundIcon, TableIcon } from "lucide-react"
 
 const data = {
   user: {
@@ -34,12 +34,14 @@ const data = {
       ),
     },
     {
-      title: "Agents",
-      url: "/admin/agents",
+      title: "Account",
+      url: "/admin/account",
       icon: (
-        <UsersIcon
+        <CircleUserRoundIcon
         />
       ),
+      items: [{ title: "Admin", url: "/admin/admin" }, { title: "Agents", url: "/admin/agents" }],
+
     },
     {
       title: "VM",
@@ -48,16 +50,8 @@ const data = {
         <ServerIcon
         />
       ),
-      items: [{ title: "Overview", url: "/admin/vm" }, { title: "Projects", url: "/admin/vm/projects" }],
+      items: [{ title: "Overview", url: "/admin/vm" }, { title: "Projects", url: "/admin/vm/projects" }, { title: "Schemas", url: "/admin/schemas" }, { title: "Consumers", url: "/admin/consumers" }],
 
-    },
-    {
-      title: "Analytics",
-      url: "#",
-      icon: (
-        <ChartBarIcon
-        />
-      ),
     },
     {
       title: "Projects",
