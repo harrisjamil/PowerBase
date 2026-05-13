@@ -1,6 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdminRequest } from "@/lib/auth/session"
 import { getPool } from '@/lib/db'
+import { isSafePgIdentifier, quotePgIdentifier } from "@/lib/control-schema"
+import { canAccessSchema } from "@/lib/schema-access"
+
+type CreateTableColumn = {
+  column_name: string
+  data_type: string
+  is_nullable?: boolean
+  column_default?: string | null
+  is_primary_key?: boolean
+}
+
+function invalidIdentifierResponse(label: string) {
+  return NextResponse.json(
+    { success: false, error: `Enter a valid ${label}.` },
+    { status: 400 }
+  )
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
 
 // GET - Fetch all tables in a schema
 export async function GET(
@@ -12,11 +33,22 @@ export async function GET(
 
   try {
     const { schemaName } = await params
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
     console.log(`Fetching tables for schema: ${schemaName}`)
     
     const client = await getPool().connect()
     
     try {
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
       // Check if schema exists
       const schemaCheck = await client.query(
         'SELECT nspname FROM pg_namespace WHERE nspname = $1',
@@ -70,13 +102,13 @@ export async function GET(
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Database error:', error)
     return NextResponse.json(
       { 
         success: false, 
         error: 'Failed to fetch tables', 
-        details: error.message 
+        details: getErrorMessage(error, 'Failed to fetch tables') 
       },
       { status: 500 }
     )
@@ -93,26 +125,58 @@ export async function POST(
 
   try {
     const { schemaName } = await params
-    const body = await request.json()
-    const { table_name, description, columns } = body
+    const body = (await request.json()) as {
+      table_name?: unknown
+      description?: unknown
+      columns?: unknown
+    }
+    const table_name = typeof body.table_name === "string" ? body.table_name : ""
+    const description = typeof body.description === "string" ? body.description : ""
+    const columns = Array.isArray(body.columns) ? (body.columns as CreateTableColumn[]) : null
 
-    if (!table_name || !columns || columns.length === 0) {
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
+    if (
+      typeof table_name !== "string" ||
+      !isSafePgIdentifier(table_name) ||
+      !Array.isArray(columns) ||
+      columns.length === 0 ||
+      columns.some(
+        (column) =>
+          !column ||
+          typeof column !== "object" ||
+          !isSafePgIdentifier(String(column.column_name ?? "")) ||
+          typeof column.data_type !== "string" ||
+          !column.data_type.trim()
+      )
+    ) {
       return NextResponse.json(
-        { success: false, error: 'Table name and at least one column are required' },
+        { success: false, error: 'Enter a valid table name and at least one valid column.' },
         { status: 400 }
       )
     }
 
     const client = await getPool().connect()
+    let inTransaction = false
     
     try {
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
       await client.query('BEGIN')
+      inTransaction = true
       
       // Build CREATE TABLE statement
-      let createTableSQL = `CREATE TABLE "${schemaName}"."${table_name}" (\n`
+      let createTableSQL = `CREATE TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(table_name)} (\n`
       
-      const columnDefinitions = columns.map((col: any) => {
-        let def = `  "${col.column_name}" ${col.data_type.toUpperCase()}`
+      const columnDefinitions = columns.map((col) => {
+        let def = `  ${quotePgIdentifier(col.column_name)} ${String(col.data_type).toUpperCase()}`
         
         if (!col.is_nullable) {
           def += ` NOT NULL`
@@ -139,10 +203,13 @@ export async function POST(
       if (description && description.trim()) {
         // Escape single quotes in description
         const escapedDescription = description.replace(/'/g, "''")
-        await client.query(`COMMENT ON TABLE "${schemaName}"."${table_name}" IS '${escapedDescription}'`)
+        await client.query(
+          `COMMENT ON TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(table_name)} IS '${escapedDescription}'`
+        )
       }
       
       await client.query('COMMIT')
+      inTransaction = false
       client.release()
       
       return NextResponse.json({
@@ -152,15 +219,17 @@ export async function POST(
       })
       
     } catch (error) {
-      await client.query('ROLLBACK')
+      if (inTransaction) {
+        await client.query('ROLLBACK')
+      }
       client.release()
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error creating table:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to create table' },
+      { success: false, error: getErrorMessage(error, 'Failed to create table') },
       { status: 500 }
     )
   }
@@ -180,7 +249,10 @@ export async function DELETE(
     const table_name = searchParams.get('table_name')
     const cascade = searchParams.get('cascade') === 'true'
 
-    if (!table_name) {
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
+    if (!table_name || !isSafePgIdentifier(table_name)) {
       return NextResponse.json(
         { success: false, error: 'Table name is required' },
         { status: 400 }
@@ -190,7 +262,15 @@ export async function DELETE(
     const client = await getPool().connect()
     
     try {
-      const dropSQL = `DROP TABLE "${schemaName}"."${table_name}"${cascade ? ' CASCADE' : ''}`
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
+      const dropSQL = `DROP TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(table_name)}${cascade ? ' CASCADE' : ''}`
       console.log('Deleting table with SQL:', dropSQL)
       await client.query(dropSQL)
       client.release()
@@ -205,10 +285,10 @@ export async function DELETE(
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error deleting table:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to delete table' },
+      { success: false, error: getErrorMessage(error, 'Failed to delete table') },
       { status: 500 }
     )
   }

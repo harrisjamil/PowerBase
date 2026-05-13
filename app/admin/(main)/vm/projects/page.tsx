@@ -1,34 +1,19 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   FolderKanban,
   Plus,
   RefreshCw,
-  Calendar,
-  User,
-  CheckCircle2,
-  Clock,
-  MoreVertical,
-  Edit,
-  Trash2,
-  Copy,
   ExternalLink,
+  CheckCircle2,
+  Database,
+  UserRound,
+  Layers3,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Table as UITable,
   TableBody,
@@ -37,62 +22,49 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
-import {
-  getVmProjectStats,
-  loadVmProjects,
-  saveVmProjects,
-  type VmProject as Project,
-  type VmProjectStats as ProjectStats,
-} from "@/lib/vm-projects"
+
+type SchemaProject = {
+  schema_name: string
+  owner: string
+  table_count: number
+  total_size: string
+  description: string | null
+  owner_superadmin_id: number | null
+  owner_superadmin_email: string | null
+}
+
+type SchemasResponse = {
+  success: boolean
+  schemas?: SchemaProject[]
+  controlSchema?: string
+  error?: string
+}
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [stats, setStats] = useState<ProjectStats | null>(null)
+  const [schemas, setSchemas] = useState<SchemaProject[]>([])
+  const [controlSchema, setControlSchema] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [activeTab, setActiveTab] = useState<"all" | "active" | "archived" | "draft">("all")
-  const [showEditModal, setShowEditModal] = useState(false)
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null)
-  const [formData, setFormData] = useState({
-    name: "",
-    description: "",
-    status: "active" as Project["status"],
-  })
-  const [saving, setSaving] = useState(false)
-
-  const fetchProjects = async (): Promise<Project[]> => {
-    return loadVmProjects()
-  }
-
-  const fetchStats = async (): Promise<ProjectStats> => {
-    return getVmProjectStats(loadVmProjects())
-  }
-
-  const updateProject = async (id: string, data: Partial<typeof formData>) => {
-    void id
-    void data
-    return true
-  }
-
-  const deleteProject = async (id: string) => {
-    void id
-    return true
-  }
 
   const loadData = useCallback(async () => {
     setLoading(true)
-    const [projectsData, statsData] = await Promise.all([fetchProjects(), fetchStats()])
-    setProjects(projectsData)
-    setStats(statsData)
-    setLoading(false)
+    try {
+      const response = await fetch("/api/schemas")
+      const result = (await response.json()) as SchemasResponse
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to load projects")
+      }
+
+      setSchemas(result.schemas ?? [])
+      setControlSchema(result.controlSchema ?? null)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load projects")
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   const handleRefresh = async () => {
@@ -101,92 +73,33 @@ export default function ProjectsPage() {
     setRefreshing(false)
   }
 
-  const handleEdit = async () => {
-    if (!selectedProject) return
-    if (!formData.name.trim()) {
-      toast.error("Project name is required")
-      return
-    }
-
-    setSaving(true)
-    try {
-      const success = await updateProject(selectedProject.id, {
-        name: formData.name,
-        description: formData.description,
-        status: formData.status,
-      })
-      if (success) {
-        const updatedProjects = projects.map((p) =>
-          p.id === selectedProject.id
-            ? {
-                ...p,
-                name: formData.name,
-                description: formData.description || null,
-                status: formData.status,
-                updated_at: new Date().toISOString(),
-              }
-            : p
-        )
-        setProjects(updatedProjects)
-        saveVmProjects(updatedProjects)
-        setStats(getVmProjectStats(updatedProjects))
-
-        toast.success(`Project "${formData.name}" updated`)
-        setShowEditModal(false)
-        setSelectedProject(null)
-      } else {
-        toast.error("Failed to update project")
-      }
-    } catch {
-      toast.error("Failed to update project")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleDelete = async (project: Project) => {
-    if (!confirm(`Delete project "${project.name}"? This action cannot be undone.`)) return
-
-    try {
-      const success = await deleteProject(project.id)
-      if (success) {
-        const updatedProjects = projects.filter((p) => p.id !== project.id)
-        setProjects(updatedProjects)
-        saveVmProjects(updatedProjects)
-        setStats(getVmProjectStats(updatedProjects))
-        toast.success(`Project "${project.name}" deleted`)
-      } else {
-        toast.error("Failed to delete project")
-      }
-    } catch {
-      toast.error("Failed to delete project")
-    }
-  }
-
-  const openEditModal = (project: Project) => {
-    setSelectedProject(project)
-    setFormData({
-      name: project.name,
-      description: project.description || "",
-      status: project.status,
-    })
-    setShowEditModal(true)
-  }
-
   useEffect(() => {
     let cancelled = false
 
     const loadInitialData = async () => {
-      setLoading(true)
-      const [projectsData, statsData] = await Promise.all([fetchProjects(), fetchStats()])
+      try {
+        const response = await fetch("/api/schemas")
+        const result = (await response.json()) as SchemasResponse
 
-      if (cancelled) {
-        return
+        if (cancelled) {
+          return
+        }
+
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Failed to load projects")
+        }
+
+        setSchemas(result.schemas ?? [])
+        setControlSchema(result.controlSchema ?? null)
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Failed to load projects")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
       }
-
-      setProjects(projectsData)
-      setStats(statsData)
-      setLoading(false)
     }
 
     void loadInitialData()
@@ -196,30 +109,21 @@ export default function ProjectsPage() {
     }
   }, [])
 
-  const getStatusBadge = (status: Project["status"]) => {
-    switch (status) {
-      case "active":
-        return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Active</Badge>
-      case "archived":
-        return <Badge variant="secondary" className="bg-gray-100 text-gray-800">Archived</Badge>
-      case "draft":
-        return <Badge variant="outline" className="border-amber-200 text-amber-700">Draft</Badge>
-    }
-  }
+  const projects = useMemo(() => {
+    return schemas.filter(
+      (schema) => schema.schema_name !== "public" && schema.schema_name !== controlSchema
+    )
+  }, [controlSchema, schemas])
 
-  const filteredProjects = projects.filter((p) => (activeTab === "all" ? true : p.status === activeTab))
-
-  const formatDate = (date: string) => {
-    const d = new Date(date)
-    const now = new Date()
-    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (diffDays === 0) return "Today"
-    if (diffDays === 1) return "Yesterday"
-    if (diffDays < 7) return `${diffDays} days ago`
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
-    return d.toLocaleDateString()
-  }
+  const stats = useMemo(
+    () => ({
+      total: projects.length,
+      assigned: projects.filter((project) => Boolean(project.owner_superadmin_id)).length,
+      unassigned: projects.filter((project) => !project.owner_superadmin_id).length,
+      totalTables: projects.reduce((sum, project) => sum + Number(project.table_count || 0), 0),
+    }),
+    [projects]
+  )
 
   if (loading) {
     return (
@@ -238,8 +142,7 @@ export default function ProjectsPage() {
             Projects
           </h1>
           <p className="text-sm text-muted-foreground">
-            Manage your organization&apos;s projects. Track status, members, and activity across all
-            initiatives.
+            Real projects backed by your live Postgres schemas.
           </p>
         </div>
 
@@ -257,200 +160,114 @@ export default function ProjectsPage() {
         </div>
       </div>
 
-      {/* Stats Cards */}
-      {stats && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Total</p>
-                <p className="text-2xl font-bold">{stats.total}</p>
-              </div>
-              <FolderKanban className="h-8 w-8 text-muted-foreground/50" />
-            </div>
-          </div>
-          <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Active</p>
-                <p className="text-2xl font-bold text-green-600">{stats.active}</p>
-              </div>
-              <CheckCircle2 className="h-8 w-8 text-green-500/50" />
-            </div>
-          </div>
-          <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Draft</p>
-                <p className="text-2xl font-bold text-amber-600">{stats.draft}</p>
-              </div>
-              <Clock className="h-8 w-8 text-amber-500/50" />
-            </div>
-          </div>
-          <div className="rounded-lg border bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Archived</p>
-                <p className="text-2xl font-bold text-gray-500">{stats.archived}</p>
-              </div>
-              <Calendar className="h-8 w-8 text-gray-400/50" />
-            </div>
-          </div>
-        </div>
-      )}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Projects</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <span className="text-2xl font-bold">{stats.total}</span>
+            <FolderKanban className="h-5 w-5 text-muted-foreground" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Assigned owners</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <span className="text-2xl font-bold">{stats.assigned}</span>
+            <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Unassigned</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <span className="text-2xl font-bold">{stats.unassigned}</span>
+            <UserRound className="h-5 w-5 text-amber-600" />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Tables</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <span className="text-2xl font-bold">{stats.totalTables}</span>
+            <Layers3 className="h-5 w-5 text-sky-600" />
+          </CardContent>
+        </Card>
+      </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="gap-4">
-        <TabsList variant="line" className="w-full flex-wrap justify-start">
-          <TabsTrigger value="all">All projects</TabsTrigger>
-          <TabsTrigger value="active">Active</TabsTrigger>
-          <TabsTrigger value="draft">Draft</TabsTrigger>
-          <TabsTrigger value="archived">Archived</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value={activeTab} className="flex flex-col gap-4">
-          <div className="border rounded-xl bg-white shadow-sm overflow-x-auto">
-            <UITable>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Owner</TableHead>
-                  <TableHead className="text-center">Members</TableHead>
-                  <TableHead>Last updated</TableHead>
-                  <TableHead className="w-[70px]" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredProjects.map((project) => (
-                  <TableRow key={project.id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
+      <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+        <UITable>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Project</TableHead>
+              <TableHead>Schema</TableHead>
+              <TableHead>Owner superadmin</TableHead>
+              <TableHead>Tables</TableHead>
+              <TableHead>Size</TableHead>
+              <TableHead>DB owner</TableHead>
+              <TableHead className="w-[110px] text-right">Open</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {projects.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                  No real projects found yet.
+                  <Button asChild variant="link" className="ml-2">
+                    <Link href="/admin/vm/projects/new">Create one</Link>
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ) : (
+              projects.map((project) => (
+                <TableRow key={project.schema_name}>
+                  <TableCell>
+                    <div className="flex min-w-[220px] items-start gap-3">
+                      <div className="rounded-lg bg-muted p-2">
                         <FolderKanban className="h-4 w-4 text-muted-foreground" />
-                        <span>{project.name}</span>
                       </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground max-w-md truncate">
-                      {project.description || "—"}
-                    </TableCell>
-                    <TableCell>{getStatusBadge(project.status)}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <User className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-sm">{project.owner.split("@")[0]}</span>
+                      <div>
+                        <div className="font-medium">{project.schema_name}</div>
+                        <div className="text-sm text-muted-foreground">
+                          {project.description || "No description"}
+                        </div>
                       </div>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary" className="font-mono">
-                        {project.member_count}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                      {formatDate(project.updated_at)}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEditModal(project)}>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Copy className="h-4 w-4 mr-2" />
-                            Duplicate
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <ExternalLink className="h-4 w-4 mr-2" />
-                            Open
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleDelete(project)}
-                            className="text-red-600 focus:text-red-600"
-                          >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </UITable>
-            {filteredProjects.length === 0 && (
-              <div className="p-8 text-center text-sm text-muted-foreground">
-                No projects found in this category.
-                <Button asChild variant="link" className="ml-2">
-                  <Link href="/admin/vm/projects/new">Create one →</Link>
-                </Button>
-              </div>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2 font-mono text-sm">
+                      <Database className="h-4 w-4 text-muted-foreground" />
+                      {project.schema_name}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {project.owner_superadmin_email ? (
+                      <Badge variant="secondary">{project.owner_superadmin_email}</Badge>
+                    ) : (
+                      <Badge variant="outline">Unassigned</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>{project.table_count}</TableCell>
+                  <TableCell>{project.total_size}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{project.owner}</TableCell>
+                  <TableCell className="text-right">
+                    <Button asChild variant="ghost" size="sm" className="gap-1">
+                      <Link href={`/admin/schemas/${encodeURIComponent(project.schema_name)}`}>
+                        <ExternalLink className="h-4 w-4" />
+                        Open
+                      </Link>
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
             )}
-          </div>
-        </TabsContent>
-      </Tabs>
-
-      {/* Edit Project Dialog */}
-      <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit project</DialogTitle>
-            <DialogDescription>Update project details and status.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="edit-name">Project name *</Label>
-              <Input
-                id="edit-name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                autoFocus
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="edit-description">Description</Label>
-              <Textarea
-                id="edit-description"
-                value={formData.description}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => 
-                  setFormData({ ...formData, description: e.target.value })
-                }
-                rows={3}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="edit-status">Status</Label>
-              <div className="flex gap-4">
-                {(["active", "draft", "archived"] as const).map((status) => (
-                  <label key={status} className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="edit-status"
-                      value={status}
-                      checked={formData.status === status}
-                      onChange={() => setFormData({ ...formData, status })}
-                      className="h-4 w-4"
-                    />
-                    <span className="text-sm capitalize">{status}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEditModal(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleEdit} disabled={saving}>
-              {saving ? "Saving..." : "Save changes"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </TableBody>
+        </UITable>
+      </div>
     </div>
   )
 }

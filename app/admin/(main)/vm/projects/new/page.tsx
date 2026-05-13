@@ -2,55 +2,92 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ArrowLeft, FolderKanban } from "lucide-react"
-import { ProjectSetupForm, type ProjectFormData } from "@/components/projects/project-setup-form"
+import {
+  ProjectSetupForm,
+  type ProjectFormData,
+  type ProjectSuperadmin,
+} from "@/components/projects/project-setup-form"
 import { Button } from "@/components/ui/button"
-import { createVmProject, loadVmProjects, saveVmProjects } from "@/lib/vm-projects"
 import { toast } from "sonner"
+
+type SuperadminsResponse = {
+  success: boolean
+  users?: Array<{
+    id: number
+    email: string
+  }>
+  error?: string
+}
 
 export default function NewProjectPage() {
   const router = useRouter()
   const [saving, setSaving] = useState(false)
+  const [superadmins, setSuperadmins] = useState<ProjectSuperadmin[]>([])
+  const [loadingSuperadmins, setLoadingSuperadmins] = useState(true)
 
-  const createProjectSchema = async (projectName: string, description: string) => {
-    const schemaName = projectName.trim()
+  useEffect(() => {
+    let cancelled = false
 
-    const response = await fetch("/api/schemas", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        schema_name: schemaName,
-        description: description.trim() || `Project schema for ${schemaName}`,
-      }),
-    })
+    const loadSuperadmins = async () => {
+      try {
+        const response = await fetch("/api/superadmins")
+        const result = (await response.json()) as SuperadminsResponse
 
-    const result = await response.json()
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Failed to load superadmins")
+        }
 
-    if (!response.ok || !result.success) {
-      throw new Error(result.error || `Failed to create schema "${schemaName}"`)
+        if (!cancelled) {
+          setSuperadmins(
+            (result.users ?? []).map((user) => ({
+              id: String(user.id),
+              email: user.email,
+            }))
+          )
+        }
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Failed to load superadmins")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingSuperadmins(false)
+        }
+      }
     }
 
-    return schemaName
-  }
+    void loadSuperadmins()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const handleCreateProject = async (data: ProjectFormData) => {
     setSaving(true)
 
     try {
-      const schemaName = await createProjectSchema(data.name, data.description)
-      const projects = loadVmProjects()
-      const newProject = createVmProject({
-        name: data.name,
-        description: data.description,
-        region: data.region,
-        postgresType: data.postgresType,
+      const response = await fetch("/api/schemas", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          schema_name: data.schemaName,
+          description: `Project schema for ${data.name}`,
+          owner_superadmin_id: data.ownerSuperadminId,
+        }),
       })
 
-      saveVmProjects([newProject, ...projects])
-      toast.success(`Project "${data.name}" created with schema "${schemaName}"`)
+      const result = await response.json()
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to create project")
+      }
+
+      toast.success(`Project "${data.name}" created with schema "${data.schemaName}"`)
       router.push("/admin/vm/projects")
     } catch (error) {
       const message =
@@ -77,17 +114,21 @@ export default function NewProjectPage() {
             Create Project
           </h1>
           <p className="text-sm text-muted-foreground">
-            Set up a new project on its own page instead of inside a modal.
+            Create a real schema-backed project and assign one superadmin owner.
           </p>
         </div>
       </div>
 
-      <ProjectSetupForm
-        onSubmit={handleCreateProject}
-        onCancel={() => router.push("/admin/vm/projects")}
-        organizations={[{ id: "1", name: "Haris Mian's Org", plan: "Free" }]}
-        isSubmitting={saving}
-      />
+      {loadingSuperadmins ? (
+        <div className="text-sm text-muted-foreground">Loading superadmins...</div>
+      ) : (
+        <ProjectSetupForm
+          onSubmit={handleCreateProject}
+          onCancel={() => router.push("/admin/vm/projects")}
+          superadmins={superadmins}
+          isSubmitting={saving}
+        />
+      )}
     </div>
   )
 }

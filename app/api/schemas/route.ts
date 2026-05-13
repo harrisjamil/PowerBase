@@ -1,6 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdminRequest } from "@/lib/auth/session"
 import { getPool } from '@/lib/db'
+import {
+  getControlSchema,
+  isSafePgIdentifier,
+  quotePgIdentifier,
+} from "@/lib/control-schema"
+import {
+  assignSchemaOwner,
+  canAccessSchema,
+  ensureSchemaAccessTable,
+  getQuotedSchemaAccessTableRef,
+  getSuperadminById,
+  removeSchemaOwnerRecord,
+  renameSchemaOwnerRecord,
+} from "@/lib/schema-access"
+
+function readOptionalSuperadminId(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null || value === "") return null
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value)
+  return undefined
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
 
 // GET - Fetch all schemas
 export async function GET(request: NextRequest) {
@@ -11,6 +37,8 @@ export async function GET(request: NextRequest) {
     const client = await getPool().connect()
     
     try {
+      await ensureSchemaAccessTable(client)
+
       // Improved query to get all schemas with accurate table counts
       const query = `
         SELECT 
@@ -19,26 +47,34 @@ export async function GET(request: NextRequest) {
           COUNT(DISTINCT c.oid) FILTER (WHERE c.relkind IN ('r', 'v', 'm', 'p') AND c.relname NOT LIKE 'pg_%') as table_count,
           COALESCE(pg_catalog.pg_size_pretty(SUM(pg_total_relation_size(c.oid))), '0 bytes') as total_size,
           pg_catalog.obj_description(n.oid) as description,
-          n.nspowner as owner_id
+          n.nspowner as owner_id,
+          access_map.superadmin_id as owner_superadmin_id,
+          owner_user.email as owner_superadmin_email
         FROM pg_catalog.pg_namespace n
         LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid 
           AND c.relkind IN ('r', 'v', 'm', 'p')
           AND c.relname NOT LIKE 'pg_%'
           AND c.relname NOT LIKE 'sql_%'
+        LEFT JOIN ${getQuotedSchemaAccessTableRef()} access_map
+          ON access_map.schema_name = n.nspname
+        LEFT JOIN ${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier("superadmin")} owner_user
+          ON owner_user.id = access_map.superadmin_id
         WHERE n.nspname NOT LIKE 'pg_%'
           AND n.nspname != 'information_schema'
           AND n.nspname NOT LIKE '%backup%'
-        GROUP BY n.nspname, n.nspowner, n.oid
+          AND (access_map.superadmin_id IS NULL OR access_map.superadmin_id = $1)
+        GROUP BY n.nspname, n.nspowner, n.oid, access_map.superadmin_id, owner_user.email
         ORDER BY n.nspname
       `
       
-      const result = await client.query(query)
+      const result = await client.query(query, [auth.session.id])
       client.release()
       
       return NextResponse.json({
         success: true,
         schemas: result.rows,
-        count: result.rows.length
+        count: result.rows.length,
+        controlSchema: getControlSchema(),
       })
       
     } catch (error) {
@@ -63,55 +99,115 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { schema_name, owner, description } = body
+    const ownerSuperadminId = readOptionalSuperadminId(
+      (body as { owner_superadmin_id?: unknown }).owner_superadmin_id
+    )
 
-    if (!schema_name) {
+    if (typeof schema_name !== "string" || !isSafePgIdentifier(schema_name.trim())) {
       return NextResponse.json(
-        { success: false, error: 'Schema name is required' },
+        { success: false, error: 'Enter a valid schema name.' },
+        { status: 400 }
+      )
+    }
+    if ((body as { owner_superadmin_id?: unknown }).owner_superadmin_id !== undefined && ownerSuperadminId === undefined) {
+      return NextResponse.json(
+        { success: false, error: 'Enter a valid superadmin owner.' },
         { status: 400 }
       )
     }
 
+    const normalizedSchemaName = schema_name.trim()
+
     const client = await getPool().connect()
+    let inTransaction = false
     
     try {
+      await ensureSchemaAccessTable(client)
+
+      const schemaExists = await client.query<{ exists: boolean }>(
+        `
+          SELECT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_namespace
+            WHERE nspname = $1
+          ) AS exists
+        `,
+        [normalizedSchemaName]
+      )
+
+      if (schemaExists.rows[0]?.exists) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: `Schema "${normalizedSchemaName}" already exists.` },
+          { status: 409 }
+        )
+      }
+
+      let ownerSuperadmin = null
+      if (ownerSuperadminId !== undefined && ownerSuperadminId !== null) {
+        ownerSuperadmin = await getSuperadminById(client, ownerSuperadminId)
+        if (!ownerSuperadmin) {
+          client.release()
+          return NextResponse.json(
+            { success: false, error: 'Selected superadmin was not found.' },
+            { status: 400 }
+          )
+        }
+      }
+
       await client.query('BEGIN')
+      inTransaction = true
       
       // Create schema
-      const createSchemaQuery = `CREATE SCHEMA IF NOT EXISTS "${schema_name}"`
+      const createSchemaQuery = `CREATE SCHEMA ${quotePgIdentifier(normalizedSchemaName)}`
       await client.query(createSchemaQuery)
       
       // Set owner if specified and not postgres
       if (owner && owner !== 'postgres' && owner !== 'pg_database_owner') {
         try {
-          await client.query(`ALTER SCHEMA "${schema_name}" OWNER TO "${owner}"`)
-        } catch (ownerError) {
+          await client.query(
+            `ALTER SCHEMA ${quotePgIdentifier(normalizedSchemaName)} OWNER TO ${quotePgIdentifier(String(owner))}`
+          )
+        } catch {
           console.log('Could not change owner, continuing...')
         }
       }
       
       // Set comment/description if provided
       if (description) {
-        await client.query(`COMMENT ON SCHEMA "${schema_name}" IS '${description.replace(/'/g, "''")}'`)
+        await client.query(
+          `COMMENT ON SCHEMA ${quotePgIdentifier(normalizedSchemaName)} IS '${String(description).replace(/'/g, "''")}'`
+        )
+      }
+
+      if (ownerSuperadminId !== undefined) {
+        await assignSchemaOwner(client, normalizedSchemaName, ownerSuperadminId ?? null)
       }
       
       await client.query('COMMIT')
+      inTransaction = false
       client.release()
       
       return NextResponse.json({
         success: true,
-        message: `Schema ${schema_name} created successfully`
+        message: `Schema ${normalizedSchemaName} created successfully`,
+        schema_name: normalizedSchemaName,
+        owner_superadmin_id: ownerSuperadminId ?? null,
+        owner_superadmin_email: ownerSuperadmin?.email ?? null,
       })
       
     } catch (error) {
-      await client.query('ROLLBACK')
+      if (inTransaction) {
+        await client.query('ROLLBACK')
+      }
       client.release()
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error creating schema:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to create schema' },
+      { success: false, error: getErrorMessage(error, 'Failed to create schema') },
       { status: 500 }
     )
   }
@@ -125,31 +221,97 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
     const { old_name, new_name, owner, description } = body
+    const ownerSuperadminProvided = Object.prototype.hasOwnProperty.call(body, "owner_superadmin_id")
+    const ownerSuperadminId = readOptionalSuperadminId(
+      (body as { owner_superadmin_id?: unknown }).owner_superadmin_id
+    )
 
-    if (!old_name) {
+    if (typeof old_name !== "string" || !isSafePgIdentifier(old_name.trim())) {
       return NextResponse.json(
-        { success: false, error: 'Schema name is required' },
+        { success: false, error: 'Current schema name is required.' },
+        { status: 400 }
+      )
+    }
+    if (new_name && (typeof new_name !== "string" || !isSafePgIdentifier(new_name.trim()))) {
+      return NextResponse.json(
+        { success: false, error: 'Enter a valid new schema name.' },
+        { status: 400 }
+      )
+    }
+    if (ownerSuperadminProvided && ownerSuperadminId === undefined) {
+      return NextResponse.json(
+        { success: false, error: 'Enter a valid superadmin owner.' },
         { status: 400 }
       )
     }
 
+    const oldSchemaName = old_name.trim()
+    const nextSchemaName = typeof new_name === "string" && new_name.trim() ? new_name.trim() : oldSchemaName
+
     const client = await getPool().connect()
+    let inTransaction = false
     
     try {
+      if (!(await canAccessSchema(client, auth.session.id, oldSchemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
+      await ensureSchemaAccessTable(client)
+      
+      if (nextSchemaName !== oldSchemaName) {
+        const schemaExists = await client.query<{ exists: boolean }>(
+          `
+            SELECT EXISTS (
+              SELECT 1
+              FROM pg_catalog.pg_namespace
+              WHERE nspname = $1
+            ) AS exists
+          `,
+          [nextSchemaName]
+        )
+
+        if (schemaExists.rows[0]?.exists) {
+          client.release()
+          return NextResponse.json(
+            { success: false, error: `Schema "${nextSchemaName}" already exists.` },
+            { status: 409 }
+          )
+        }
+      }
+
+      if (ownerSuperadminProvided && ownerSuperadminId !== null) {
+        const ownerSuperadmin = await getSuperadminById(client, ownerSuperadminId!)
+        if (!ownerSuperadmin) {
+          client.release()
+          return NextResponse.json(
+            { success: false, error: 'Selected superadmin was not found.' },
+            { status: 400 }
+          )
+        }
+      }
+
       await client.query('BEGIN')
+      inTransaction = true
       
       // Rename schema if new name provided
-      if (new_name && new_name !== old_name) {
-        await client.query(`ALTER SCHEMA "${old_name}" RENAME TO "${new_name}"`)
+      if (nextSchemaName !== oldSchemaName) {
+        await client.query(
+          `ALTER SCHEMA ${quotePgIdentifier(oldSchemaName)} RENAME TO ${quotePgIdentifier(nextSchemaName)}`
+        )
+        await renameSchemaOwnerRecord(client, oldSchemaName, nextSchemaName)
       }
-      
-      const schemaName = new_name || old_name
       
       // Change owner if specified
       if (owner && owner !== 'pg_database_owner') {
         try {
-          await client.query(`ALTER SCHEMA "${schemaName}" OWNER TO "${owner}"`)
-        } catch (ownerError) {
+          await client.query(
+            `ALTER SCHEMA ${quotePgIdentifier(nextSchemaName)} OWNER TO ${quotePgIdentifier(String(owner))}`
+          )
+        } catch {
           console.log('Could not change owner, continuing...')
         }
       }
@@ -157,30 +319,39 @@ export async function PUT(request: NextRequest) {
       // Update comment/description if provided
       if (description !== undefined) {
         if (description) {
-          await client.query(`COMMENT ON SCHEMA "${schemaName}" IS '${description.replace(/'/g, "''")}'`)
+          await client.query(
+            `COMMENT ON SCHEMA ${quotePgIdentifier(nextSchemaName)} IS '${String(description).replace(/'/g, "''")}'`
+          )
         } else {
-          await client.query(`COMMENT ON SCHEMA "${schemaName}" IS NULL`)
+          await client.query(`COMMENT ON SCHEMA ${quotePgIdentifier(nextSchemaName)} IS NULL`)
         }
+      }
+
+      if (ownerSuperadminProvided) {
+        await assignSchemaOwner(client, nextSchemaName, ownerSuperadminId ?? null)
       }
       
       await client.query('COMMIT')
+      inTransaction = false
       client.release()
       
       return NextResponse.json({
         success: true,
-        message: `Schema ${schemaName} updated successfully`
+        message: `Schema ${nextSchemaName} updated successfully`
       })
       
     } catch (error) {
-      await client.query('ROLLBACK')
+      if (inTransaction) {
+        await client.query('ROLLBACK')
+      }
       client.release()
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error updating schema:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to update schema' },
+      { success: false, error: getErrorMessage(error, 'Failed to update schema') },
       { status: 500 }
     )
   }
@@ -196,7 +367,7 @@ export async function DELETE(request: NextRequest) {
     const schema_name = searchParams.get('schema_name')
     const cascade = searchParams.get('cascade') === 'true'
 
-    if (!schema_name) {
+    if (!schema_name || !isSafePgIdentifier(schema_name)) {
       return NextResponse.json(
         { success: false, error: 'Schema name is required' },
         { status: 400 }
@@ -204,13 +375,27 @@ export async function DELETE(request: NextRequest) {
     }
 
     const client = await getPool().connect()
+    let inTransaction = false
     
     try {
+      if (!(await canAccessSchema(client, auth.session.id, schema_name))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
+      await client.query("BEGIN")
+      inTransaction = true
       const deleteQuery = cascade 
-        ? `DROP SCHEMA IF EXISTS "${schema_name}" CASCADE`
-        : `DROP SCHEMA IF EXISTS "${schema_name}" RESTRICT`
+        ? `DROP SCHEMA IF EXISTS ${quotePgIdentifier(schema_name)} CASCADE`
+        : `DROP SCHEMA IF EXISTS ${quotePgIdentifier(schema_name)} RESTRICT`
       
       await client.query(deleteQuery)
+      await removeSchemaOwnerRecord(client, schema_name)
+      await client.query("COMMIT")
+      inTransaction = false
       client.release()
       
       return NextResponse.json({
@@ -219,14 +404,17 @@ export async function DELETE(request: NextRequest) {
       })
       
     } catch (error) {
+      if (inTransaction) {
+        await client.query("ROLLBACK")
+      }
       client.release()
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error deleting schema:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to delete schema' },
+      { success: false, error: getErrorMessage(error, 'Failed to delete schema') },
       { status: 500 }
     )
   }

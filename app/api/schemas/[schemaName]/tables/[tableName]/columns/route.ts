@@ -1,6 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdminRequest } from "@/lib/auth/session"
 import { getPool } from '@/lib/db'
+import { isSafePgIdentifier, quotePgIdentifier } from "@/lib/control-schema"
+import { canAccessSchema } from "@/lib/schema-access"
+
+type ColumnMutationBody = {
+  column_name?: unknown
+  old_name?: unknown
+  new_name?: unknown
+  data_type?: unknown
+  is_nullable?: unknown
+  column_default?: unknown
+}
+
+function invalidIdentifierResponse(label: string) {
+  return NextResponse.json(
+    { success: false, error: `Enter a valid ${label}.` },
+    { status: 400 }
+  )
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
 
 // GET - Fetch all columns
 export async function GET(
@@ -12,11 +34,25 @@ export async function GET(
 
   try {
     const { schemaName, tableName } = await params
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
+    if (!isSafePgIdentifier(tableName)) {
+      return invalidIdentifierResponse("table name")
+    }
     console.log(`Fetching columns for ${schemaName}.${tableName}`)
     
     const client = await getPool().connect()
     
     try {
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
       const query = `
         SELECT 
           a.attname as column_name,
@@ -55,10 +91,10 @@ export async function GET(
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Database error:', error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch columns', details: error.message },
+      { success: false, error: 'Failed to fetch columns', details: getErrorMessage(error, 'Failed to fetch columns') },
       { status: 500 }
     )
   }
@@ -74,10 +110,19 @@ export async function POST(
 
   try {
     const { schemaName, tableName } = await params
-    const body = await request.json()
-    const { column_name, data_type, is_nullable, column_default } = body
+    const body = (await request.json()) as ColumnMutationBody
+    const column_name = typeof body.column_name === "string" ? body.column_name : ""
+    const data_type = typeof body.data_type === "string" ? body.data_type : ""
+    const is_nullable = body.is_nullable
+    const column_default = typeof body.column_default === "string" ? body.column_default : body.column_default
 
-    if (!column_name || !data_type) {
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
+    if (!isSafePgIdentifier(tableName)) {
+      return invalidIdentifierResponse("table name")
+    }
+    if (typeof column_name !== "string" || !isSafePgIdentifier(column_name) || !data_type) {
       return NextResponse.json(
         { success: false, error: 'Column name and data type are required' },
         { status: 400 }
@@ -87,7 +132,15 @@ export async function POST(
     const client = await getPool().connect()
     
     try {
-      let alterQuery = `ALTER TABLE "${schemaName}"."${tableName}" ADD COLUMN "${column_name}" ${data_type.toUpperCase()}`
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
+      let alterQuery = `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ADD COLUMN ${quotePgIdentifier(column_name)} ${String(data_type).toUpperCase()}`
       
       if (is_nullable === false) {
         alterQuery += ` NOT NULL`
@@ -111,10 +164,10 @@ export async function POST(
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error adding column:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to add column' },
+      { success: false, error: getErrorMessage(error, 'Failed to add column') },
       { status: 500 }
     )
   }
@@ -130,52 +183,89 @@ export async function PUT(
 
   try {
     const { schemaName, tableName } = await params
-    const body = await request.json()
-    const { old_name, new_name, data_type, is_nullable, column_default } = body
+    const body = (await request.json()) as ColumnMutationBody
+    const old_name = typeof body.old_name === "string" ? body.old_name : ""
+    const new_name = typeof body.new_name === "string" ? body.new_name : undefined
+    const data_type = typeof body.data_type === "string" ? body.data_type : undefined
+    const is_nullable = body.is_nullable
+    const column_default =
+      typeof body.column_default === "string" ? body.column_default : body.column_default
 
-    if (!old_name) {
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
+    if (!isSafePgIdentifier(tableName)) {
+      return invalidIdentifierResponse("table name")
+    }
+    if (typeof old_name !== "string" || !isSafePgIdentifier(old_name)) {
       return NextResponse.json(
         { success: false, error: 'Column name is required' },
         { status: 400 }
       )
     }
+    if (new_name && (typeof new_name !== "string" || !isSafePgIdentifier(new_name))) {
+      return invalidIdentifierResponse("column name")
+    }
 
     const client = await getPool().connect()
+    let inTransaction = false
     
     try {
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
       await client.query('BEGIN')
+      inTransaction = true
       
       const currentColumnName = new_name || old_name
       
       // Rename column if name changed
       if (new_name && new_name !== old_name) {
-        await client.query(`ALTER TABLE "${schemaName}"."${tableName}" RENAME COLUMN "${old_name}" TO "${new_name}"`)
+        await client.query(
+          `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} RENAME COLUMN ${quotePgIdentifier(old_name)} TO ${quotePgIdentifier(new_name)}`
+        )
       }
       
       // Change data type if provided
       if (data_type) {
-        await client.query(`ALTER TABLE "${schemaName}"."${tableName}" ALTER COLUMN "${currentColumnName}" TYPE ${data_type.toUpperCase()}`)
+        await client.query(
+          `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} TYPE ${String(data_type).toUpperCase()}`
+        )
       }
       
       // Change nullable constraint
       if (is_nullable !== undefined) {
         if (is_nullable === true) {
-          await client.query(`ALTER TABLE "${schemaName}"."${tableName}" ALTER COLUMN "${currentColumnName}" DROP NOT NULL`)
+          await client.query(
+            `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} DROP NOT NULL`
+          )
         } else {
-          await client.query(`ALTER TABLE "${schemaName}"."${tableName}" ALTER COLUMN "${currentColumnName}" SET NOT NULL`)
+          await client.query(
+            `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} SET NOT NULL`
+          )
         }
       }
       
       // Change default value
       if (column_default !== undefined) {
         if (column_default && column_default !== '') {
-          await client.query(`ALTER TABLE "${schemaName}"."${tableName}" ALTER COLUMN "${currentColumnName}" SET DEFAULT ${column_default}`)
+          await client.query(
+            `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} SET DEFAULT ${column_default}`
+          )
         } else {
-          await client.query(`ALTER TABLE "${schemaName}"."${tableName}" ALTER COLUMN "${currentColumnName}" DROP DEFAULT`)
+          await client.query(
+            `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} DROP DEFAULT`
+          )
         }
       }
       
       await client.query('COMMIT')
+      inTransaction = false
       client.release()
       
       return NextResponse.json({
@@ -184,15 +274,17 @@ export async function PUT(
       })
       
     } catch (error) {
-      await client.query('ROLLBACK')
+      if (inTransaction) {
+        await client.query('ROLLBACK')
+      }
       client.release()
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error updating column:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to update column' },
+      { success: false, error: getErrorMessage(error, 'Failed to update column') },
       { status: 500 }
     )
   }
@@ -211,7 +303,13 @@ export async function DELETE(
     const { searchParams } = new URL(request.url)
     const column_name = searchParams.get('column_name')
 
-    if (!column_name) {
+    if (!isSafePgIdentifier(schemaName)) {
+      return invalidIdentifierResponse("schema name")
+    }
+    if (!isSafePgIdentifier(tableName)) {
+      return invalidIdentifierResponse("table name")
+    }
+    if (!column_name || !isSafePgIdentifier(column_name)) {
       return NextResponse.json(
         { success: false, error: 'Column name is required' },
         { status: 400 }
@@ -221,7 +319,15 @@ export async function DELETE(
     const client = await getPool().connect()
     
     try {
-      const dropSQL = `ALTER TABLE "${schemaName}"."${tableName}" DROP COLUMN "${column_name}"`
+      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+        client.release()
+        return NextResponse.json(
+          { success: false, error: "You do not have access to this schema." },
+          { status: 403 }
+        )
+      }
+
+      const dropSQL = `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} DROP COLUMN ${quotePgIdentifier(column_name)}`
       console.log('Deleting column with SQL:', dropSQL)
       await client.query(dropSQL)
       client.release()
@@ -236,10 +342,10 @@ export async function DELETE(
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error deleting column:', error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to delete column' },
+      { success: false, error: getErrorMessage(error, 'Failed to delete column') },
       { status: 500 }
     )
   }

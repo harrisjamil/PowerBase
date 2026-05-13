@@ -1,20 +1,22 @@
 import { NextResponse } from "next/server"
-import { getAdminSessionFromRequest, unauthorizedJson } from "@/lib/auth/session"
+import { requireAdminRequest } from "@/lib/auth/session"
 import { getPool } from "@/lib/db"
+import { getAccessibleSchemaNames } from "@/lib/schema-access"
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Failed to fetch schema hierarchy"
 }
 
 export async function GET(request: Request) {
-  if (!getAdminSessionFromRequest(request)) {
-    return unauthorizedJson()
-  }
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
 
   try {
     const client = await getPool().connect()
 
     try {
+      const accessibleSchemas = await getAccessibleSchemaNames(client, auth.session.id)
+
       const schemasQuery = `
         SELECT
           n.nspname AS schema_name,
@@ -148,19 +150,34 @@ export async function GET(request: Request) {
         client.query(columnsQuery),
       ])
 
+      const visibleSchemas = schemasResult.rows.filter((schema) =>
+        accessibleSchemas.has(schema.schema_name)
+      )
+      const visibleTables = tablesResult.rows.filter((table) =>
+        accessibleSchemas.has(table.schema_name)
+      )
+      const visibleRelationships = relationshipsResult.rows.filter(
+        (relationship) =>
+          accessibleSchemas.has(relationship.from_schema) &&
+          accessibleSchemas.has(relationship.to_schema)
+      )
+      const visibleColumns = columnsResult.rows.filter((column) =>
+        accessibleSchemas.has(column.schema_name)
+      )
+
       client.release()
 
       return NextResponse.json({
         success: true,
-        schemas: schemasResult.rows,
-        tables: tablesResult.rows,
-        relationships: relationshipsResult.rows,
-        columns: columnsResult.rows,
+        schemas: visibleSchemas,
+        tables: visibleTables,
+        relationships: visibleRelationships,
+        columns: visibleColumns,
         counts: {
-          schemas: schemasResult.rows.length,
-          tables: tablesResult.rows.length,
-          relationships: relationshipsResult.rows.length,
-          columns: columnsResult.rows.length,
+          schemas: visibleSchemas.length,
+          tables: visibleTables.length,
+          relationships: visibleRelationships.length,
+          columns: visibleColumns.length,
         },
       })
     } catch (error) {
