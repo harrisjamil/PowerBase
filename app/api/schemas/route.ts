@@ -15,6 +15,13 @@ import {
   removeSchemaOwnerRecord,
   renameSchemaOwnerRecord,
 } from "@/lib/schema-access"
+import {
+  ensureProjectsTable,
+  removeProjectRecord,
+  renameProjectRecord,
+  upsertProjectRecord,
+} from "@/lib/projects"
+import { getQuotedProjectsTableRef } from "@/lib/control-schema"
 
 function readOptionalSuperadminId(value: unknown): number | null | undefined {
   if (value === undefined) return undefined
@@ -38,11 +45,13 @@ export async function GET(request: NextRequest) {
     
     try {
       await ensureSchemaAccessTable(client)
+      await ensureProjectsTable(client)
 
       // Improved query to get all schemas with accurate table counts
       const query = `
         SELECT 
           n.nspname as schema_name,
+          projects.name as project_name,
           COALESCE(pg_catalog.pg_get_userbyid(n.nspowner), 'unknown') as owner,
           COUNT(DISTINCT c.oid) FILTER (WHERE c.relkind IN ('r', 'v', 'm', 'p') AND c.relname NOT LIKE 'pg_%') as table_count,
           COALESCE(pg_catalog.pg_size_pretty(SUM(pg_total_relation_size(c.oid))), '0 bytes') as total_size,
@@ -55,6 +64,8 @@ export async function GET(request: NextRequest) {
           AND c.relkind IN ('r', 'v', 'm', 'p')
           AND c.relname NOT LIKE 'pg_%'
           AND c.relname NOT LIKE 'sql_%'
+        LEFT JOIN ${getQuotedProjectsTableRef()} projects
+          ON projects.schema_name = n.nspname
         LEFT JOIN ${getQuotedSchemaAccessTableRef()} access_map
           ON access_map.schema_name = n.nspname
         LEFT JOIN ${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier("superadmin")} owner_user
@@ -63,7 +74,7 @@ export async function GET(request: NextRequest) {
           AND n.nspname != 'information_schema'
           AND n.nspname NOT LIKE '%backup%'
           AND (access_map.superadmin_id IS NULL OR access_map.superadmin_id = $1)
-        GROUP BY n.nspname, n.nspowner, n.oid, access_map.superadmin_id, owner_user.email
+        GROUP BY n.nspname, projects.name, n.nspowner, n.oid, access_map.superadmin_id, owner_user.email
         ORDER BY n.nspname
       `
       
@@ -99,6 +110,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const { schema_name, owner, description } = body
+    const projectName =
+      typeof (body as { project_name?: unknown }).project_name === "string"
+        ? (body as { project_name: string }).project_name.trim()
+        : ""
     const ownerSuperadminId = readOptionalSuperadminId(
       (body as { owner_superadmin_id?: unknown }).owner_superadmin_id
     )
@@ -115,6 +130,15 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+    if (
+      (body as { project_name?: unknown }).project_name !== undefined &&
+      (!projectName || projectName.length > 255)
+    ) {
+      return NextResponse.json(
+        { success: false, error: 'Enter a valid project name.' },
+        { status: 400 }
+      )
+    }
 
     const normalizedSchemaName = schema_name.trim()
 
@@ -123,6 +147,7 @@ export async function POST(request: NextRequest) {
     
     try {
       await ensureSchemaAccessTable(client)
+      await ensureProjectsTable(client)
 
       const schemaExists = await client.query<{ exists: boolean }>(
         `
@@ -183,6 +208,14 @@ export async function POST(request: NextRequest) {
       if (ownerSuperadminId !== undefined) {
         await assignSchemaOwner(client, normalizedSchemaName, ownerSuperadminId ?? null)
       }
+      if (projectName) {
+        await upsertProjectRecord(client, {
+          name: projectName,
+          schemaName: normalizedSchemaName,
+          description: typeof description === "string" ? description : null,
+          ownerSuperadminId: ownerSuperadminId ?? null,
+        })
+      }
       
       await client.query('COMMIT')
       inTransaction = false
@@ -221,6 +254,11 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
     const { old_name, new_name, owner, description } = body
+    const projectNameProvided = Object.prototype.hasOwnProperty.call(body, "project_name")
+    const projectName =
+      typeof (body as { project_name?: unknown }).project_name === "string"
+        ? (body as { project_name: string }).project_name.trim()
+        : undefined
     const ownerSuperadminProvided = Object.prototype.hasOwnProperty.call(body, "owner_superadmin_id")
     const ownerSuperadminId = readOptionalSuperadminId(
       (body as { owner_superadmin_id?: unknown }).owner_superadmin_id
@@ -244,6 +282,12 @@ export async function PUT(request: NextRequest) {
         { status: 400 }
       )
     }
+    if (projectNameProvided && (!projectName || projectName.length > 255)) {
+      return NextResponse.json(
+        { success: false, error: 'Enter a valid project name.' },
+        { status: 400 }
+      )
+    }
 
     const oldSchemaName = old_name.trim()
     const nextSchemaName = typeof new_name === "string" && new_name.trim() ? new_name.trim() : oldSchemaName
@@ -261,6 +305,7 @@ export async function PUT(request: NextRequest) {
       }
 
       await ensureSchemaAccessTable(client)
+      await ensureProjectsTable(client)
       
       if (nextSchemaName !== oldSchemaName) {
         const schemaExists = await client.query<{ exists: boolean }>(
@@ -330,6 +375,12 @@ export async function PUT(request: NextRequest) {
       if (ownerSuperadminProvided) {
         await assignSchemaOwner(client, nextSchemaName, ownerSuperadminId ?? null)
       }
+      await renameProjectRecord(client, oldSchemaName, {
+        schemaName: nextSchemaName,
+        name: projectNameProvided ? projectName : undefined,
+        description: description !== undefined ? (description ? String(description) : null) : undefined,
+        ownerSuperadminId: ownerSuperadminProvided ? ownerSuperadminId ?? null : undefined,
+      })
       
       await client.query('COMMIT')
       inTransaction = false
@@ -394,6 +445,7 @@ export async function DELETE(request: NextRequest) {
       
       await client.query(deleteQuery)
       await removeSchemaOwnerRecord(client, schema_name)
+      await removeProjectRecord(client, schema_name)
       await client.query("COMMIT")
       inTransaction = false
       client.release()

@@ -17,6 +17,7 @@ interface DeleteConfirmationDialogProps {
   title?: string
   description?: string
   itemName?: string
+  confirming?: boolean
 }
 
 export function DeleteConfirmationDialog({
@@ -26,12 +27,8 @@ export function DeleteConfirmationDialog({
   title = "Delete Item",
   description = "Are you sure you want to delete this item? This action cannot be undone.",
   itemName,
+  confirming = false,
 }: DeleteConfirmationDialogProps) {
-  const handleConfirm = () => {
-    onConfirm()
-    onOpenChange(false)
-  }
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
@@ -43,11 +40,16 @@ export function DeleteConfirmationDialog({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={confirming}
+          >
             Cancel
           </Button>
-          <Button type="button" variant="destructive" onClick={handleConfirm}>
-            Delete
+          <Button type="button" variant="destructive" onClick={onConfirm} disabled={confirming}>
+            {confirming ? "Deleting..." : "Delete"}
           </Button>
         </DialogFooter>
       </DialogContent>

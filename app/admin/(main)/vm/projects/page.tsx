@@ -11,7 +11,9 @@ import {
   Database,
   UserRound,
   Layers3,
+  Trash2,
 } from "lucide-react"
+import { DeleteConfirmationDialog } from "@/components/agents/delete-confirmation-dialog"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -25,7 +27,9 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 
-type SchemaProject = {
+type Project = {
+  id: number
+  name: string
   schema_name: string
   owner: string
   table_count: number
@@ -33,33 +37,36 @@ type SchemaProject = {
   description: string | null
   owner_superadmin_id: number | null
   owner_superadmin_email: string | null
+  status: string
+  created_at: string | null
+  updated_at: string | null
 }
 
-type SchemasResponse = {
+type ProjectsResponse = {
   success: boolean
-  schemas?: SchemaProject[]
-  controlSchema?: string
+  projects?: Project[]
   error?: string
 }
 
 export default function ProjectsPage() {
-  const [schemas, setSchemas] = useState<SchemaProject[]>([])
-  const [controlSchema, setControlSchema] = useState<string | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const response = await fetch("/api/schemas")
-      const result = (await response.json()) as SchemasResponse
+      const response = await fetch("/api/projects")
+      const result = (await response.json()) as ProjectsResponse
 
       if (!response.ok || !result.success) {
         throw new Error(result.error || "Failed to load projects")
       }
 
-      setSchemas(result.schemas ?? [])
-      setControlSchema(result.controlSchema ?? null)
+      setProjects(result.projects ?? [])
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load projects")
     } finally {
@@ -78,8 +85,8 @@ export default function ProjectsPage() {
 
     const loadInitialData = async () => {
       try {
-        const response = await fetch("/api/schemas")
-        const result = (await response.json()) as SchemasResponse
+        const response = await fetch("/api/projects")
+        const result = (await response.json()) as ProjectsResponse
 
         if (cancelled) {
           return
@@ -89,8 +96,7 @@ export default function ProjectsPage() {
           throw new Error(result.error || "Failed to load projects")
         }
 
-        setSchemas(result.schemas ?? [])
-        setControlSchema(result.controlSchema ?? null)
+        setProjects(result.projects ?? [])
       } catch (error) {
         if (!cancelled) {
           toast.error(error instanceof Error ? error.message : "Failed to load projects")
@@ -109,11 +115,35 @@ export default function ProjectsPage() {
     }
   }, [])
 
-  const projects = useMemo(() => {
-    return schemas.filter(
-      (schema) => schema.schema_name !== "public" && schema.schema_name !== controlSchema
-    )
-  }, [controlSchema, schemas])
+  const openDelete = (project: Project) => {
+    setSelectedProject(project)
+    setDeleteOpen(true)
+  }
+
+  const handleDelete = async () => {
+    if (!selectedProject) return
+
+    setDeleting(true)
+    try {
+      const response = await fetch(`/api/projects?id=${encodeURIComponent(String(selectedProject.id))}`, {
+        method: "DELETE",
+      })
+      const result = (await response.json()) as { success?: boolean; error?: string }
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to delete project")
+      }
+
+      toast.success(`Project "${selectedProject.name}" deleted. Schema "${selectedProject.schema_name}" was kept.`)
+      setDeleteOpen(false)
+      setSelectedProject(null)
+      await loadData()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete project")
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const stats = useMemo(
     () => ({
@@ -231,7 +261,7 @@ export default function ProjectsPage() {
                         <FolderKanban className="h-4 w-4 text-muted-foreground" />
                       </div>
                       <div>
-                        <div className="font-medium">{project.schema_name}</div>
+                        <div className="font-medium">{project.name}</div>
                         <div className="text-sm text-muted-foreground">
                           {project.description || "No description"}
                         </div>
@@ -255,12 +285,22 @@ export default function ProjectsPage() {
                   <TableCell>{project.total_size}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{project.owner}</TableCell>
                   <TableCell className="text-right">
-                    <Button asChild variant="ghost" size="sm" className="gap-1">
-                      <Link href={`/admin/schemas/${encodeURIComponent(project.schema_name)}`}>
-                        <ExternalLink className="h-4 w-4" />
-                        Open
-                      </Link>
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button asChild variant="ghost" size="sm" className="gap-1">
+                        <Link href={`/admin/schemas/${encodeURIComponent(project.schema_name)}`}>
+                          <ExternalLink className="h-4 w-4" />
+                          Open
+                        </Link>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-600 hover:text-red-700"
+                        onClick={() => openDelete(project)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -268,6 +308,20 @@ export default function ProjectsPage() {
           </TableBody>
         </UITable>
       </div>
+
+      <DeleteConfirmationDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onConfirm={handleDelete}
+        title="Delete Project"
+        description={
+          selectedProject
+            ? `This removes only the project record. The schema "${selectedProject.schema_name}" will not be deleted.`
+            : "This removes only the project record. The schema will not be deleted."
+        }
+        itemName={selectedProject?.name}
+        confirming={deleting}
+      />
     </div>
   )
 }

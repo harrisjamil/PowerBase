@@ -29,12 +29,9 @@ import { Badge } from "@/components/ui/badge"
 
 export type Agent = {
   id: number
-  name: string
   email: string
-  phone: string
-  status: string
-  department: string
-  joinDate: string
+  created_at: string | null
+  has_password: boolean
 }
 
 interface AgentsTableProps {
@@ -52,11 +49,15 @@ export function AgentsTable({
   searchTerm,
   onSearchChange,
 }: AgentsTableProps) {
+  const formatDate = (value: string | null) => {
+    if (!value) return "-"
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleDateString()
+  }
+
   const filteredAgents = agents.filter(
-    (agent) =>
-      agent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      agent.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      agent.department.toLowerCase().includes(searchTerm.toLowerCase())
+    (agent) => agent.email.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
   return (
@@ -73,7 +74,7 @@ export function AgentsTable({
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search agents by name, email, or department..."
+              placeholder="Search agents by email..."
               value={searchTerm}
               onChange={(e) => onSearchChange(e.target.value)}
               className="pl-8"
@@ -86,47 +87,31 @@ export function AgentsTable({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
+                <TableHead>ID</TableHead>
                 <TableHead>Email</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Department</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Join Date</TableHead>
+                <TableHead>Password</TableHead>
+                <TableHead>Created</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredAgents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                    No agents found. Click "Add Agent" to create one.
+                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                    No agents found. Click &quot;Add Agent&quot; to create one.
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredAgents.map((agent) => (
                   <TableRow key={agent.id}>
-                    <TableCell className="font-medium">{agent.name}</TableCell>
+                    <TableCell className="font-medium">{agent.id}</TableCell>
                     <TableCell>{agent.email}</TableCell>
-                    <TableCell>{agent.phone}</TableCell>
-                    <TableCell>{agent.department}</TableCell>
                     <TableCell>
-                      {agent.status === "active" ? (
-                        <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 border-0">
-                          <div className="flex items-center gap-1">
-                            <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400"></div>
-                            <span>Active</span>
-                          </div>
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="bg-gray-100 text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-400 border-0">
-                          <div className="flex items-center gap-1">
-                            <div className="h-1.5 w-1.5 rounded-full bg-gray-400"></div>
-                            <span>Inactive</span>
-                          </div>
-                        </Badge>
-                      )}
+                      <Badge variant={agent.has_password ? "default" : "secondary"}>
+                        {agent.has_password ? "Set" : "Missing"}
+                      </Badge>
                     </TableCell>
-                    <TableCell>{agent.joinDate}</TableCell>
+                    <TableCell>{formatDate(agent.created_at)}</TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>

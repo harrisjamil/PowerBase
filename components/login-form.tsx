@@ -19,8 +19,21 @@ import { useState } from "react"
 
 export function LoginForm({
   className,
+  title = "Login to your account",
+  description = "Enter your email below to login to your account",
+  submitLabel = "Login",
+  loadingLabel = "Logging in...",
+  loginPath = "/api/login",
+  successRedirect = "/admin/dashboard",
   ...props
-}: React.ComponentProps<"div">) {
+}: React.ComponentProps<"div"> & {
+  title?: string
+  description?: string
+  submitLabel?: string
+  loadingLabel?: string
+  loginPath?: string
+  successRedirect?: string
+}) {
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -39,7 +52,7 @@ export function LoginForm({
     }
   
     try {
-      const response = await fetch("/api/login", {
+      const response = await fetch(loginPath, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -55,7 +68,7 @@ export function LoginForm({
         return
       }
   
-      router.replace("/admin/dashboard")
+      router.replace(successRedirect)
       router.refresh()
   
     } catch {
@@ -68,10 +81,8 @@ export function LoginForm({
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
         <CardHeader>
-          <CardTitle>Login to your account</CardTitle>
-          <CardDescription>
-            Enter your email below to login to your account
-          </CardDescription>
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{description}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit}>
@@ -111,7 +122,7 @@ export function LoginForm({
                 disabled={isLoading}
                 className={!isLoading ? "cursor-pointer" : ""}
               >
-                {isLoading ? "Logging in..." : "Login"}
+                {isLoading ? loadingLabel : submitLabel}
               </Button>
               </Field>
             </FieldGroup>

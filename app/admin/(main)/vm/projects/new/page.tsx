@@ -75,6 +75,7 @@ export default function NewProjectPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          project_name: data.name,
           schema_name: data.schemaName,
           description: `Project schema for ${data.name}`,
           owner_superadmin_id: data.ownerSuperadminId,

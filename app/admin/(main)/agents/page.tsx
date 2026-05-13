@@ -1,87 +1,75 @@
 "use client"
 
-import { useState } from "react"
-import { Plus } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { Loader2, Plus, RefreshCw } from "lucide-react"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { AgentFormDialog, AgentFormData } from "@/components/agents/agent-form-dialog"
 import { DeleteConfirmationDialog } from "@/components/agents/delete-confirmation-dialog"
 import { AgentsTable, Agent } from "@/components/agents/agents-table"
 
-// Mock data for agents
-const initialAgents: Agent[] = [
-  {
-    id: 1,
-    name: "John Doe",
-    email: "john.doe@example.com",
-    phone: "+1 234 567 8900",
-    status: "active",
-    department: "Sales",
-    joinDate: "2024-01-15",
-  },
-  {
-    id: 2,
-    name: "Jane Smith",
-    email: "jane.smith@example.com",
-    phone: "+1 234 567 8901",
-    status: "active",
-    department: "Support",
-    joinDate: "2024-02-20",
-  },
-  {
-    id: 3,
-    name: "Mike Johnson",
-    email: "mike.johnson@example.com",
-    phone: "+1 234 567 8902",
-    status: "inactive",
-    department: "Sales",
-    joinDate: "2024-01-10",
-  },
-  {
-    id: 4,
-    name: "Sarah Williams",
-    email: "sarah.williams@example.com",
-    phone: "+1 234 567 8903",
-    status: "active",
-    department: "Technical",
-    joinDate: "2024-03-05",
-  },
-]
+type AgentsResponse = {
+  success: boolean
+  agents?: Agent[]
+  count?: number
+  error?: string
+}
 
 export default function AgentsPage() {
-  const [agents, setAgents] = useState<Agent[]>(initialAgents)
+  const [agents, setAgents] = useState<Agent[]>([])
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
   const [deletingAgentId, setDeletingAgentId] = useState<number | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
-  const handleCreateAgent = (data: AgentFormData) => {
-    const newAgent: Agent = {
-      id: Math.max(0, ...agents.map((a) => a.id)) + 1,
-      ...data,
-      joinDate: new Date().toISOString().split("T")[0],
+  const requestAgents = async (): Promise<AgentsResponse> => {
+    const res = await fetch("/api/agents")
+    const data = (await res.json()) as AgentsResponse
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || "Failed to fetch agents")
     }
-    setAgents([...agents, newAgent])
+    return data
   }
 
-  const handleUpdateAgent = (data: AgentFormData) => {
-    if (editingAgent) {
-      const updatedAgents = agents.map((agent) =>
-        agent.id === editingAgent.id
-          ? { ...agent, ...data }
-          : agent
-      )
-      setAgents(updatedAgents)
-      setEditingAgent(null)
+  const refreshAgents = async (showRefreshing = false) => {
+    if (showRefreshing) setRefreshing(true)
+    try {
+      const data = await requestAgents()
+      setAgents(data.agents ?? [])
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to fetch agents")
+    } finally {
+      if (showRefreshing) setRefreshing(false)
     }
   }
 
-  const handleDeleteAgent = () => {
-    if (deletingAgentId) {
-      setAgents(agents.filter((agent) => agent.id !== deletingAgentId))
-      setDeletingAgentId(null)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = await requestAgents()
+        if (!cancelled) {
+          setAgents(data.agents ?? [])
+        }
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Failed to fetch agents")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
     }
-  }
+  }, [])
 
   const handleEdit = (agent: Agent) => {
     setEditingAgent(agent)
@@ -93,14 +81,49 @@ export default function AgentsPage() {
     setIsDeleteDialogOpen(true)
   }
 
-  const handleFormSubmit = (data: AgentFormData) => {
-    if (editingAgent) {
-      handleUpdateAgent(data)
-    } else {
-      handleCreateAgent(data)
+  const handleFormSubmit = async (data: AgentFormData) => {
+    const email = data.email.trim().toLowerCase()
+
+    if (!email) {
+      toast.error("Email is required.")
+      return
     }
-    setIsFormDialogOpen(false)
-    setEditingAgent(null)
+    if (!editingAgent && !data.password) {
+      toast.error("Password is required when creating an agent.")
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const res = await fetch("/api/agents", {
+        method: editingAgent ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingAgent?.id,
+          email,
+          password: data.password,
+        }),
+      })
+      const result = (await res.json()) as { success?: boolean; error?: string }
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || `Failed to ${editingAgent ? "update" : "create"} agent`)
+      }
+
+      toast.success(
+        editingAgent ? `Agent ${email} updated.` : `Agent ${email} created successfully.`
+      )
+      setIsFormDialogOpen(false)
+      setEditingAgent(null)
+      await refreshAgents()
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `Failed to ${editingAgent ? "update" : "create"} agent`
+      )
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const openCreateDialog = () => {
@@ -108,9 +131,43 @@ export default function AgentsPage() {
     setIsFormDialogOpen(true)
   }
 
+  const handleDeleteAgent = async () => {
+    if (!deletingAgentId) return
+
+    setSubmitting(true)
+    try {
+      const res = await fetch(`/api/agents?id=${encodeURIComponent(String(deletingAgentId))}`, {
+        method: "DELETE",
+      })
+      const result = (await res.json()) as { success?: boolean; error?: string }
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || "Failed to delete agent")
+      }
+
+      toast.success("Agent deleted successfully.")
+      setIsDeleteDialogOpen(false)
+      setDeletingAgentId(null)
+      await refreshAgents()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete agent")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const getAgentNameForDelete = () => {
-    const agent = agents.find(a => a.id === deletingAgentId)
-    return agent?.name
+    const agent = agents.find((item) => item.id === deletingAgentId)
+    return agent?.email
+  }
+
+  const totalAgents = useMemo(() => agents.length, [agents])
+
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    )
   }
 
   return (
@@ -119,13 +176,28 @@ export default function AgentsPage() {
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Agents</h1>
           <p className="text-sm text-muted-foreground">
-            Manage agents from this section. Total agents: {agents.length}
+            Manage agent logins from the `seung_control.agents` table. Total agents: {totalAgents}
           </p>
         </div>
-        <Button onClick={openCreateDialog} className="gap-2">
-          <Plus className="h-4 w-4" />
-          Add Agent
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={openCreateDialog} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Add Agent
+          </Button>
+          <Button
+            onClick={() => void refreshAgents(true)}
+            disabled={refreshing}
+            variant="outline"
+            className="gap-2"
+          >
+            {refreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <AgentsTable
@@ -137,11 +209,13 @@ export default function AgentsPage() {
       />
 
       <AgentFormDialog
+        key={isFormDialogOpen ? editingAgent?.id ?? "create" : "closed"}
         open={isFormDialogOpen}
         onOpenChange={setIsFormDialogOpen}
         onSubmit={handleFormSubmit}
         initialData={editingAgent}
         isEditing={!!editingAgent}
+        submitting={submitting}
       />
 
       <DeleteConfirmationDialog
@@ -151,6 +225,7 @@ export default function AgentsPage() {
         title="Delete Agent"
         description="This action cannot be undone. This will permanently delete the agent and remove their data from the system."
         itemName={getAgentNameForDelete()}
+        confirming={submitting}
       />
     </div>
   )

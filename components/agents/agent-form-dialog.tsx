@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -12,28 +12,19 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 
 export type AgentFormData = {
-  name: string
   email: string
-  phone: string
-  department: string
-  status: string
+  password: string
 }
 
 interface AgentFormDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (data: AgentFormData) => void
-  initialData?: AgentFormData | null
+  initialData?: Omit<AgentFormData, "password"> | null
   isEditing?: boolean
+  submitting?: boolean
 }
 
 export function AgentFormDialog({
@@ -42,19 +33,16 @@ export function AgentFormDialog({
   onSubmit,
   initialData,
   isEditing = false,
+  submitting = false,
 }: AgentFormDialogProps) {
+  const [form, setForm] = useState<AgentFormData>(() => ({
+    email: initialData?.email ?? "",
+    password: "",
+  }))
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    const formData = new FormData(e.currentTarget)
-    const data: AgentFormData = {
-      name: formData.get("name") as string,
-      email: formData.get("email") as string,
-      phone: formData.get("phone") as string,
-      department: formData.get("department") as string,
-      status: formData.get("status") as string,
-    }
-    onSubmit(data)
-    onOpenChange(false)
+    onSubmit(form)
   }
 
   return (
@@ -64,83 +52,49 @@ export function AgentFormDialog({
           <DialogTitle>{isEditing ? "Edit Agent" : "Create New Agent"}</DialogTitle>
           <DialogDescription>
             {isEditing
-              ? "Edit the agent details below."
-              : "Fill in the details below to create a new agent."}
+              ? "Update the agent email or set a new password."
+              : "Create a new agent login using email and password."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="name">Full Name</Label>
-              <Input
-                id="name"
-                name="name"
-                placeholder="Enter agent's full name"
-                defaultValue={initialData?.name}
-                required
-              />
-            </div>
-            <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
-                name="email"
                 type="email"
                 placeholder="Enter email address"
-                defaultValue={initialData?.email}
+                value={form.email}
+                onChange={(e) => setForm((current) => ({ ...current, email: e.target.value }))}
                 required
+                disabled={submitting}
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="phone">Phone Number</Label>
+              <Label htmlFor="password">{isEditing ? "New Password" : "Password"}</Label>
               <Input
-                id="phone"
-                name="phone"
-                placeholder="Enter phone number"
-                defaultValue={initialData?.phone}
-                required
+                id="password"
+                type="password"
+                placeholder={isEditing ? "Leave blank to keep current password" : "Set password"}
+                value={form.password}
+                onChange={(e) => setForm((current) => ({ ...current, password: e.target.value }))}
+                required={!isEditing}
+                disabled={submitting}
               />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="department">Department</Label>
-              <Select
-                name="department"
-                defaultValue={initialData?.department || ""}
-                required
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select department" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Sales">Sales</SelectItem>
-                  <SelectItem value="Support">Support</SelectItem>
-                  <SelectItem value="Technical">Technical</SelectItem>
-                  <SelectItem value="Marketing">Marketing</SelectItem>
-                  <SelectItem value="HR">HR</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="status">Status</Label>
-              <Select
-                name="status"
-                defaultValue={initialData?.status || "active"}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={submitting}
+            >
               Cancel
             </Button>
-            <Button type="submit">{isEditing ? "Save Changes" : "Create Agent"}</Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "Saving..." : isEditing ? "Save Changes" : "Create Agent"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
