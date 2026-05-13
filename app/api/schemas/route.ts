@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+import { requireAdminRequest } from "@/lib/auth/session"
+import { getPool } from '@/lib/db'
 
 // GET - Fetch all schemas
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       // Improved query to get all schemas with accurate table counts
@@ -57,6 +57,9 @@ export async function GET() {
 
 // POST - Create a new schema
 export async function POST(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const body = await request.json()
     const { schema_name, owner, description } = body
@@ -68,7 +71,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       await client.query('BEGIN')
@@ -116,6 +119,9 @@ export async function POST(request: NextRequest) {
 
 // PUT - Update schema (rename or change owner)
 export async function PUT(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const body = await request.json()
     const { old_name, new_name, owner, description } = body
@@ -127,7 +133,7 @@ export async function PUT(request: NextRequest) {
       )
     }
 
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       await client.query('BEGIN')
@@ -182,6 +188,9 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - Delete a schema
 export async function DELETE(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const { searchParams } = new URL(request.url)
     const schema_name = searchParams.get('schema_name')
@@ -194,7 +203,7 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       const deleteQuery = cascade 

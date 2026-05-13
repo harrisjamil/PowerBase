@@ -1,227 +1,290 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { NextRequest, NextResponse } from "next/server"
+import { requireAdminRequest } from "@/lib/auth/session"
+import { getPool } from "@/lib/db"
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+type DbUserBody = {
+  username?: unknown
+  password?: unknown
+  new_password?: unknown
+  can_create_db?: unknown
+  can_create_role?: unknown
+  is_superuser?: unknown
+  is_replication?: unknown
+  bypass_rls?: unknown
+}
 
-// GET - Fetch all database users
-export async function GET() {
+function readRoleName(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.length > 63 || trimmed.includes("\0")) return null
+  return trimmed
+}
+
+function readPassword(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  if (!value || value.length > 512 || value.includes("\0")) return null
+  return value
+}
+
+function bool(value: unknown): boolean {
+  return value === true
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replace(/"/g, "\"\"")}"`
+}
+
+function quoteLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function roleAttributes(input: {
+  can_create_db: boolean
+  can_create_role: boolean
+  is_superuser: boolean
+  is_replication: boolean
+  bypass_rls: boolean
+}) {
+  return [
+    input.can_create_db ? "CREATEDB" : "NOCREATEDB",
+    input.can_create_role ? "CREATEROLE" : "NOCREATEROLE",
+    input.is_superuser ? "SUPERUSER" : "NOSUPERUSER",
+    input.is_replication ? "REPLICATION" : "NOREPLICATION",
+    input.bypass_rls ? "BYPASSRLS" : "NOBYPASSRLS",
+  ].join(" ")
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
+export async function GET(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
+  const client = await getPool().connect()
   try {
-    const client = await pool.connect()
-    
-    try {
-      const query = `
-        SELECT 
-          usename as username,
-          usecreatedb as can_create_db,
-          usesuper as is_superuser,
-          userepl as is_replication,
-          passwd is not null as has_password,
-          valuntil::text as password_expiry,
-          usebypassrls as bypass_rls,
-          rolcreaterole as can_create_role
-        FROM pg_user
-        LEFT JOIN pg_authid ON pg_user.usesysid = pg_authid.oid
-        ORDER BY usename
-      `
-      
-      const result = await client.query(query)
-      client.release()
-      
-      return NextResponse.json({
-        success: true,
-        users: result.rows,
-        count: result.rows.length
-      })
-      
-    } catch (error) {
-      client.release()
-      throw error
-    }
-    
+    const [usersResult, metaResult] = await Promise.all([
+      client.query(`
+        SELECT
+          r.rolname AS username,
+          r.rolcreatedb AS can_create_db,
+          r.rolcreaterole AS can_create_role,
+          r.rolsuper AS is_superuser,
+          r.rolreplication AS is_replication,
+          r.rolbypassrls AS bypass_rls,
+          a.rolpassword IS NOT NULL AS has_password,
+          r.rolvaliduntil::text AS password_expiry
+        FROM pg_roles r
+        LEFT JOIN pg_authid a ON r.oid = a.oid
+        WHERE r.rolcanlogin = true
+        ORDER BY r.rolname
+      `),
+      client.query(`
+        SELECT current_database() AS database_name, current_user AS current_user
+      `),
+    ])
+
+    return NextResponse.json({
+      success: true,
+      users: usersResult.rows,
+      count: usersResult.rows.length,
+      database: metaResult.rows[0]?.database_name ?? null,
+      currentUser: metaResult.rows[0]?.current_user ?? null,
+    })
   } catch (error) {
-    console.error('Database error:', error)
+    console.error("Database error:", error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch database users' },
+      { success: false, error: "Failed to fetch database users" },
       { status: 500 }
     )
+  } finally {
+    client.release()
   }
 }
 
-// POST - Create a new database user
 export async function POST(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
+  let body: DbUserBody
   try {
-    const body = await request.json()
-    const { 
-      username, 
-      password, 
-      can_create_db, 
-      can_create_role, 
-      is_superuser, 
-      is_replication,
-      bypass_rls 
-    } = body
-
-    if (!username || !password) {
-      return NextResponse.json(
-        { success: false, error: 'Username and password are required' },
-        { status: 400 }
-      )
-    }
-
-    const client = await pool.connect()
-    
-    try {
-      await client.query('BEGIN')
-      
-      // Create user with password
-      const createUserQuery = `CREATE USER "${username}" WITH PASSWORD '${password}'`
-      await client.query(createUserQuery)
-      
-      // Grant permissions
-      if (can_create_db) {
-        await client.query(`ALTER USER "${username}" CREATEDB`)
-      }
-      
-      if (can_create_role) {
-        await client.query(`ALTER USER "${username}" CREATEROLE`)
-      }
-      
-      if (is_superuser) {
-        await client.query(`ALTER USER "${username}" SUPERUSER`)
-      }
-      
-      if (is_replication) {
-        await client.query(`ALTER USER "${username}" REPLICATION`)
-      }
-      
-      if (bypass_rls) {
-        await client.query(`ALTER USER "${username}" BYPASSRLS`)
-      }
-      
-      await client.query('COMMIT')
-      client.release()
-      
-      return NextResponse.json({
-        success: true,
-        message: `User ${username} created successfully`
-      })
-      
-    } catch (error) {
-      await client.query('ROLLBACK')
-      client.release()
-      throw error
-    }
-    
-  } catch (error: any) {
-    console.error('Error creating user:', error)
+    body = (await request.json()) as DbUserBody
+  } catch {
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to create user' },
+      { success: false, error: "Invalid JSON body" },
+      { status: 400 }
+    )
+  }
+
+  const username = readRoleName(body.username)
+  const password = readPassword(body.password)
+  if (!username || !password) {
+    return NextResponse.json(
+      { success: false, error: "Username and password are required" },
+      { status: 400 }
+    )
+  }
+
+  const role = quoteIdentifier(username)
+  const attributes = roleAttributes({
+    can_create_db: bool(body.can_create_db),
+    can_create_role: bool(body.can_create_role),
+    is_superuser: bool(body.is_superuser),
+    is_replication: bool(body.is_replication),
+    bypass_rls: bool(body.bypass_rls),
+  })
+
+  const client = await getPool().connect()
+  let inTransaction = false
+  try {
+    await client.query("BEGIN")
+    inTransaction = true
+    await client.query(`CREATE USER ${role} WITH PASSWORD ${quoteLiteral(password)}`)
+    await client.query(`ALTER USER ${role} WITH ${attributes}`)
+    await client.query("COMMIT")
+    inTransaction = false
+
+    return NextResponse.json({
+      success: true,
+      message: `User ${username} created successfully`,
+    })
+  } catch (error) {
+    if (inTransaction) {
+      await client.query("ROLLBACK")
+    }
+    console.error("Error creating user:", error)
+    return NextResponse.json(
+      { success: false, error: errorMessage(error, "Failed to create user") },
       { status: 500 }
     )
+  } finally {
+    client.release()
   }
 }
 
-// PUT - Update an existing database user
 export async function PUT(request: NextRequest) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
+  let body: DbUserBody
   try {
-    const body = await request.json()
-    const { 
-      username, 
-      new_password, 
-      can_create_db, 
-      can_create_role, 
-      is_superuser, 
-      is_replication,
-      bypass_rls 
-    } = body
-
-    if (!username) {
-      return NextResponse.json(
-        { success: false, error: 'Username is required' },
-        { status: 400 }
-      )
-    }
-
-    const client = await pool.connect()
-    
-    try {
-      await client.query('BEGIN')
-      
-      // Update password if provided
-      if (new_password) {
-        await client.query(`ALTER USER "${username}" WITH PASSWORD '${new_password}'`)
-      }
-      
-      // Update permissions
-      await client.query(`ALTER USER "${username}" ${can_create_db ? 'CREATEDB' : 'NOCREATEDB'}`)
-      await client.query(`ALTER USER "${username}" ${can_create_role ? 'CREATEROLE' : 'NOCREATEROLE'}`)
-      await client.query(`ALTER USER "${username}" ${is_superuser ? 'SUPERUSER' : 'NOSUPERUSER'}`)
-      await client.query(`ALTER USER "${username}" ${is_replication ? 'REPLICATION' : 'NOREPLICATION'}`)
-      await client.query(`ALTER USER "${username}" ${bypass_rls ? 'BYPASSRLS' : 'NOBYPASSRLS'}`)
-      
-      await client.query('COMMIT')
-      client.release()
-      
-      return NextResponse.json({
-        success: true,
-        message: `User ${username} updated successfully`
-      })
-      
-    } catch (error) {
-      await client.query('ROLLBACK')
-      client.release()
-      throw error
-    }
-    
-  } catch (error: any) {
-    console.error('Error updating user:', error)
+    body = (await request.json()) as DbUserBody
+  } catch {
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to update user' },
+      { success: false, error: "Invalid JSON body" },
+      { status: 400 }
+    )
+  }
+
+  const username = readRoleName(body.username)
+  if (!username) {
+    return NextResponse.json(
+      { success: false, error: "Username is required" },
+      { status: 400 }
+    )
+  }
+
+  const newPassword =
+    body.new_password === undefined || body.new_password === ""
+      ? null
+      : readPassword(body.new_password)
+  if (body.new_password !== undefined && body.new_password !== "" && !newPassword) {
+    return NextResponse.json(
+      { success: false, error: "New password is invalid" },
+      { status: 400 }
+    )
+  }
+
+  const role = quoteIdentifier(username)
+  const attributes = roleAttributes({
+    can_create_db: bool(body.can_create_db),
+    can_create_role: bool(body.can_create_role),
+    is_superuser: bool(body.is_superuser),
+    is_replication: bool(body.is_replication),
+    bypass_rls: bool(body.bypass_rls),
+  })
+
+  const client = await getPool().connect()
+  let inTransaction = false
+  try {
+    await client.query("BEGIN")
+    inTransaction = true
+    await client.query(
+      `ALTER USER ${role} WITH ${attributes}${newPassword ? ` PASSWORD ${quoteLiteral(newPassword)}` : ""}`
+    )
+    await client.query("COMMIT")
+    inTransaction = false
+
+    return NextResponse.json({
+      success: true,
+      message: `User ${username} updated successfully`,
+    })
+  } catch (error) {
+    if (inTransaction) {
+      await client.query("ROLLBACK")
+    }
+    console.error("Error updating user:", error)
+    return NextResponse.json(
+      { success: false, error: errorMessage(error, "Failed to update user") },
       { status: 500 }
     )
+  } finally {
+    client.release()
   }
 }
 
-// DELETE - Delete a database user
 export async function DELETE(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const username = searchParams.get('username')
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
 
-    if (!username) {
+  const { searchParams } = new URL(request.url)
+  const username = readRoleName(searchParams.get("username"))
+  if (!username) {
+    return NextResponse.json(
+      { success: false, error: "Username is required" },
+      { status: 400 }
+    )
+  }
+
+  const client = await getPool().connect()
+  let inTransaction = false
+  try {
+    const meta = await client.query<{ current_user: string }>(
+      `SELECT current_user AS current_user`
+    )
+    const currentUser = meta.rows[0]?.current_user ?? ""
+    if (username === currentUser) {
       return NextResponse.json(
-        { success: false, error: 'Username is required' },
+        { success: false, error: "You cannot delete the current database user." },
         { status: 400 }
       )
     }
 
-    const client = await pool.connect()
-    
-    try {
-      // First, reassign any owned objects to another user (usually postgres)
-      await client.query(`REASSIGN OWNED BY "${username}" TO postgres`)
-      await client.query(`DROP OWNED BY "${username}"`)
-      await client.query(`DROP USER IF EXISTS "${username}"`)
-      
-      client.release()
-      
-      return NextResponse.json({
-        success: true,
-        message: `User ${username} deleted successfully`
-      })
-      
-    } catch (error) {
-      client.release()
-      throw error
+    const role = quoteIdentifier(username)
+    const currentRole = quoteIdentifier(currentUser)
+    await client.query("BEGIN")
+    inTransaction = true
+    await client.query(`REASSIGN OWNED BY ${role} TO ${currentRole}`)
+    await client.query(`DROP OWNED BY ${role}`)
+    await client.query(`DROP USER IF EXISTS ${role}`)
+    await client.query("COMMIT")
+    inTransaction = false
+
+    return NextResponse.json({
+      success: true,
+      message: `User ${username} deleted successfully`,
+    })
+  } catch (error) {
+    if (inTransaction) {
+      await client.query("ROLLBACK")
     }
-    
-  } catch (error: any) {
-    console.error('Error deleting user:', error)
+    console.error("Error deleting user:", error)
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to delete user' },
+      { success: false, error: errorMessage(error, "Failed to delete user") },
       { status: 500 }
     )
+  } finally {
+    client.release()
   }
 }

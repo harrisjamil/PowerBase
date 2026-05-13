@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useRouter } from "next/navigation"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 
 export function LoginForm({
   className,
@@ -25,25 +25,7 @@ export function LoginForm({
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
-  const [isLoading, setIsLoading] = useState(true) // Start with loading true
-
-  // Check if user is already logged in on component mount
-  useEffect(() => {
-    const checkAuth = () => {
-      const user = localStorage.getItem('user')
-      const token = localStorage.getItem('authToken')
-      const isLoggedIn = localStorage.getItem('isLoggedIn')
-      
-      // Check all authentication criteria
-      if (user && (token || isLoggedIn === "true")) {
-        // User is already logged in, redirect to dashboard
-        router.replace('/admin/dashboard') // Use replace instead of push
-      }
-      setIsLoading(false)
-    }
-    
-    checkAuth()
-  }, [router])
+  const [isLoading, setIsLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -73,31 +55,13 @@ export function LoginForm({
         return
       }
   
-      // Store both user and token (if returned from backend)
-      localStorage.setItem("user", JSON.stringify(data.user))
-      localStorage.setItem("isLoggedIn", "true")
-      
-      // Store token if your backend returns one
-      if (data.token) {
-        localStorage.setItem("authToken", data.token)
-      }
-  
-      // Use replace to prevent back button issues
       router.replace("/admin/dashboard")
+      router.refresh()
   
-    } catch (err) {
+    } catch {
       setError("Server error. Please try again.")
       setIsLoading(false)
     }
-  }
-
-  // Show nothing while checking authentication
-  if (isLoading) {
-    return (
-      <div className="flex justify-center items-center min-h-screen">
-        <div className="text-center">Loading...</div>
-      </div>
-    )
   }
 
   return (

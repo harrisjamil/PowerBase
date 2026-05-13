@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/sidebar"
 import { EllipsisVerticalIcon, CircleUserRoundIcon, CreditCardIcon, BellIcon, LogOutIcon } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { useState } from "react"
 
 export function NavUser({
   user,
@@ -34,15 +35,17 @@ export function NavUser({
 }) {
   const { isMobile } = useSidebar()
   const router = useRouter()
+  const [loggingOut, setLoggingOut] = useState(false)
 
-  const handleLogout = () => {
-    // Clear localStorage
-    localStorage.removeItem('user')
-    localStorage.removeItem('authToken')
-    localStorage.removeItem('isLoggedIn')
-    
-    // Redirect to login page
-    router.push('/admin/login')
+  const handleLogout = async () => {
+    setLoggingOut(true)
+    try {
+      await fetch("/api/logout", { method: "POST" })
+    } finally {
+      router.replace("/admin/login")
+      router.refresh()
+      setLoggingOut(false)
+    }
   }
 
   return (
@@ -103,9 +106,9 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout}>
+            <DropdownMenuItem onClick={() => void handleLogout()} disabled={loggingOut}>
               <LogOutIcon className="mr-2 h-4 w-4" />
-              Log out
+              {loggingOut ? "Logging out..." : "Log out"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

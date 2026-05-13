@@ -17,12 +17,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
 import { Loader2Icon } from "lucide-react"
 
+type AccountUser = {
+  id: number
+  email: string
+  controlSchema: string
+}
+
 export default function AccountPage() {
   const router = useRouter()
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<AccountUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [savingPassword, setSavingPassword] = useState(false)
   const [formData, setFormData] = useState({
-    name: "",
     email: "",
     currentPassword: "",
     newPassword: "",
@@ -30,24 +37,37 @@ export default function AccountPage() {
   })
 
   useEffect(() => {
-    // Check if user is logged in
-    const storedUser = localStorage.getItem('user')
-    const isLoggedIn = localStorage.getItem('isLoggedIn')
-    
-    if (!storedUser || isLoggedIn !== 'true') {
-      router.push('/admin/login')
-    } else {
-      const userData = JSON.parse(storedUser)
-      setUser(userData)
-      setFormData({
-        name: userData.name || "",
-        email: userData.email || "",
-        currentPassword: "",
-        newPassword: "",
-        confirmPassword: "",
-      })
+    let cancelled = false
+
+    ;(async () => {
+      try {
+        const res = await fetch("/api/account", { credentials: "same-origin" })
+        const data = (await res.json()) as { success?: boolean; user?: AccountUser }
+        if (!res.ok || !data.success || !data.user) {
+          throw new Error("Unauthorized")
+        }
+
+        if (!cancelled) {
+          setUser(data.user)
+          setFormData((current) => ({
+            ...current,
+            email: data.user?.email ?? "",
+          }))
+        }
+      } catch {
+        if (!cancelled) {
+          router.replace("/admin/login")
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
     }
-    setIsLoading(false)
   }, [router])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -59,20 +79,31 @@ export default function AccountPage() {
 
   const handleUpdateProfile = (e: React.FormEvent) => {
     e.preventDefault()
-    
-    // Update user in localStorage
-    const updatedUser = {
-      ...user,
-      name: formData.name,
-      email: formData.email,
-    }
-    
-    localStorage.setItem('user', JSON.stringify(updatedUser))
-    setUser(updatedUser)
-    
-    toast.success("Profile Updated", {
-      description: "Your profile has been successfully updated.",
-    })
+    void (async () => {
+      setSavingProfile(true)
+      try {
+        const res = await fetch("/api/account", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: formData.email }),
+        })
+        const data = (await res.json()) as { success?: boolean; error?: string; user?: AccountUser }
+        if (!res.ok || !data.success || !data.user) {
+          throw new Error(data.error || "Failed to update profile")
+        }
+
+        setUser(data.user)
+        setFormData((current) => ({ ...current, email: data.user?.email ?? "" }))
+        router.refresh()
+        toast.success("Profile Updated", {
+          description: "Your account email has been updated.",
+        })
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to update profile")
+      } finally {
+        setSavingProfile(false)
+      }
+    })()
   }
 
   const handleChangePassword = (e: React.FormEvent) => {
@@ -92,17 +123,38 @@ export default function AccountPage() {
       return
     }
     
-    // Here you would typically call an API to update the password
-    toast.success("Password Updated", {
-      description: "Your password has been successfully changed.",
-    })
-    
-    setFormData({
-      ...formData,
-      currentPassword: "",
-      newPassword: "",
-      confirmPassword: "",
-    })
+    void (async () => {
+      setSavingPassword(true)
+      try {
+        const res = await fetch("/api/account", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            currentPassword: formData.currentPassword,
+            newPassword: formData.newPassword,
+          }),
+        })
+        const data = (await res.json()) as { success?: boolean; error?: string }
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Failed to update password")
+        }
+
+        toast.success("Password Updated", {
+          description: "Your password has been successfully changed.",
+        })
+
+        setFormData((current) => ({
+          ...current,
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: "",
+        }))
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to update password")
+      } finally {
+        setSavingPassword(false)
+      }
+    })()
   }
 
   if (isLoading) {
@@ -129,13 +181,13 @@ export default function AccountPage() {
             <CardContent className="pt-6">
               <div className="flex flex-col items-center gap-4">
                 <Avatar className="h-24 w-24">
-                  <AvatarImage src={user?.avatar} alt={user?.name} />
+                  <AvatarImage src="" alt={user?.email ?? "Admin"} />
                   <AvatarFallback className="text-2xl">
-                    {user?.name?.charAt(0).toUpperCase()}
+                    {(user?.email?.charAt(0) || "?").toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
                 <div className="text-center">
-                  <h3 className="font-semibold">{user?.name}</h3>
+                  <h3 className="font-semibold">{user?.email?.split("@")[0] || "Admin"}</h3>
                   <p className="text-sm text-muted-foreground">{user?.email}</p>
                 </div>
                 <Button variant="outline" size="sm" className="w-full">
@@ -167,15 +219,6 @@ export default function AccountPage() {
                 <CardContent>
                   <form onSubmit={handleUpdateProfile} className="space-y-4">
                     <div className="grid gap-2">
-                      <Label htmlFor="name">Full Name</Label>
-                      <Input
-                        id="name"
-                        value={formData.name}
-                        onChange={handleInputChange}
-                        placeholder="Enter your full name"
-                      />
-                    </div>
-                    <div className="grid gap-2">
                       <Label htmlFor="email">Email Address</Label>
                       <Input
                         id="email"
@@ -185,7 +228,9 @@ export default function AccountPage() {
                         placeholder="Enter your email"
                       />
                     </div>
-                    <Button type="submit">Save Changes</Button>
+                    <Button type="submit" disabled={savingProfile}>
+                      {savingProfile ? "Saving..." : "Save Changes"}
+                    </Button>
                   </form>
                 </CardContent>
               </Card>
@@ -235,7 +280,9 @@ export default function AccountPage() {
                         required
                       />
                     </div>
-                    <Button type="submit">Change Password</Button>
+                    <Button type="submit" disabled={savingPassword}>
+                      {savingPassword ? "Updating..." : "Change Password"}
+                    </Button>
                   </form>
                 </CardContent>
               </Card>

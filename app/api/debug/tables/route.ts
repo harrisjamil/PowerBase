@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { getAdminSessionFromRequest, unauthorizedJson } from "@/lib/auth/session"
+import { getPool } from '@/lib/db'
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+export async function GET(request: Request) {
+  if (!getAdminSessionFromRequest(request)) {
+    return unauthorizedJson()
+  }
 
-export async function GET() {
   try {
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       // Query to see all tables across all schemas

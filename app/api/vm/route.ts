@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { Pool } from "pg";
-
-type ParsedDbUrl = {
-  user: string;
-  password: string;
-  host: string;
-  port: string;
-  database: string;
-};
+import { requireAdminRequest } from "@/lib/auth/session";
+import type { Pool } from "pg";
+import { getPool, resetPool } from "@/lib/db";
+import { getEffectiveParsed, getEnvParsed } from "@/lib/effective-database-url";
+import type { ParsedDbUrl } from "@/lib/postgres-url";
+import {
+  readVmLocalSettings,
+  patchVmLocalSettings,
+} from "@/lib/vm-local-settings";
 
 function assertPgRoleName(name: unknown): { ok: true; quoted: string } | { ok: false; error: string } {
   if (typeof name !== "string" || !/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(name)) {
@@ -17,55 +17,6 @@ function assertPgRoleName(name: unknown): { ok: true; quoted: string } | { ok: f
     };
   }
   return { ok: true, quoted: `"${name.replace(/"/g, '""')}"` };
-}
-
-// Create connection pool using DATABASE_URL
-let pool: Pool | null = null;
-
-function getPool() {
-  const dbUrl = process.env.DATABASE_URL;
-  
-  if (!dbUrl) {
-    throw new Error("DATABASE_URL not set");
-  }
-  
-  if (!pool) {
-    pool = new Pool({
-      connectionString: dbUrl,
-      connectionTimeoutMillis: 5000,
-      max: 10,
-    });
-  }
-  
-  return pool;
-}
-
-// Helper function to parse PostgreSQL URL
-function parsePostgresUrl(url: string) {
-  try {
-    const clean = url.replace("postgresql://", "");
-    const [auth, hostPart] = clean.split("@");
-    const [user, password] = auth.split(":");
-    const [hostPort, database] = hostPart.split("/");
-    const [host, port] = hostPort.split(":");
-    
-    return {
-      user,
-      password,
-      host,
-      port: port || "5432",
-      database: database || "postgres",
-    };
-  } catch (error) {
-    console.error("Error parsing DATABASE_URL:", error);
-    return {
-      user: "unknown",
-      password: "unknown",
-      host: "unknown",
-      port: "5432",
-      database: "unknown",
-    };
-  }
 }
 
 /** Rich server info from PostgreSQL (host OS CPU/RAM are not visible over SQL alone). */
@@ -158,82 +109,92 @@ async function getVMInfo(poolInstance: Pool, parsed: ParsedDbUrl) {
 }
 
 export async function GET(request: Request) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const dbUrl = process.env.DATABASE_URL;
-    
+
     if (!dbUrl) {
       return NextResponse.json(
         { success: false, error: "DATABASE_URL not set" },
         { status: 500 }
       );
     }
-    
+
     const { searchParams } = new URL(request.url);
-    const action = searchParams.get('action');
-    
-    // Get VM / server info (from PostgreSQL + connection URL)
+    const action = searchParams.get("action");
+
     if (action === "vminfo") {
-      const parsed = parsePostgresUrl(dbUrl);
+      const parsed = getEffectiveParsed();
       const vmInfo = await getVMInfo(getPool(), parsed);
+      const local = readVmLocalSettings();
+      vmInfo.vmDisplayName = local.displayName ?? "";
       return NextResponse.json({
         success: true,
         vmInfo,
       });
     }
-    
-    // Get connection info
-    if (!action || action === 'info') {
-      const parsed = parsePostgresUrl(dbUrl);
+
+    if (!action || action === "info") {
+      const parsed = getEffectiveParsed();
+      const envParsed = getEnvParsed();
       const poolInstance = getPool();
-      
-      // Get PostgreSQL version from database
-      let pgVersion = 'Unknown';
+
+      let pgVersion = "Unknown";
       try {
-        const versionResult = await poolInstance.query('SELECT version()');
+        const versionResult = await poolInstance.query("SELECT version()");
         pgVersion = versionResult.rows[0].version;
       } catch (err) {
-        console.error('Failed to get PostgreSQL version:', err);
+        console.error("Failed to get PostgreSQL version:", err);
       }
-      
-      // Get database size
-      let dbSize = 'Unknown';
+
+      let dbSize = "Unknown";
       try {
-        const sizeResult = await poolInstance.query(`
+        const sizeResult = await poolInstance.query(
+          `
           SELECT pg_database_size($1) as size
-        `, [parsed.database]);
+        `,
+          [parsed.database]
+        );
         const bytes = sizeResult.rows[0].size;
-        dbSize = bytes ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : 'Unknown';
+        dbSize = bytes ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : "Unknown";
       } catch (err) {
-        console.error('Failed to get database size:', err);
+        console.error("Failed to get database size:", err);
       }
-      
-      // Get active connections
+
       let activeConnections = 0;
       try {
-        const connResult = await poolInstance.query(`
+        const connResult = await poolInstance.query(
+          `
           SELECT count(*) FROM pg_stat_activity WHERE datname = $1
-        `, [parsed.database]);
+        `,
+          [parsed.database]
+        );
         activeConnections = parseInt(connResult.rows[0].count);
       } catch (err) {
-        console.error('Failed to get active connections:', err);
+        console.error("Failed to get active connections:", err);
       }
-      
+
+      const local = readVmLocalSettings();
       return NextResponse.json({
         success: true,
+        vmDisplayName: local.displayName ?? "",
         db: {
           host: parsed.host,
           port: parsed.port,
           database: parsed.database,
           user: parsed.user,
+          envHost: envParsed.host,
+          envPort: envParsed.port,
           pgVersion,
           dbSize,
           activeConnections,
         },
       });
     }
-    
-    // Get all users
-    if (action === 'users') {
+
+    if (action === "users") {
       const poolInstance = getPool();
       const result = await poolInstance.query(`
         SELECT 
@@ -244,15 +205,14 @@ export async function GET(request: Request) {
         FROM pg_user
         ORDER BY usename
       `);
-      
+
       return NextResponse.json({
         success: true,
         users: result.rows,
       });
     }
-    
-    // Get database statistics
-    if (action === 'stats') {
+
+    if (action === "stats") {
       const poolInstance = getPool();
       const result = await poolInstance.query(`
         SELECT 
@@ -268,15 +228,14 @@ export async function GET(request: Request) {
         ORDER BY n_live_tup DESC
         LIMIT 20
       `);
-      
+
       return NextResponse.json({
         success: true,
         stats: result.rows,
       });
     }
-    
-    // Get all tables
-    if (action === 'tables') {
+
+    if (action === "tables") {
       const poolInstance = getPool();
       const result = await poolInstance.query(`
         SELECT 
@@ -287,25 +246,25 @@ export async function GET(request: Request) {
         AND table_type = 'BASE TABLE'
         ORDER BY table_name
       `);
-      
+
       return NextResponse.json({
         success: true,
         tables: result.rows,
       });
     }
-    
-    // Get table schema
-    if (action === 'schema') {
-      const tableName = searchParams.get('table');
+
+    if (action === "schema") {
+      const tableName = searchParams.get("table");
       if (!tableName) {
         return NextResponse.json(
-          { success: false, error: 'Table name required' },
+          { success: false, error: "Table name required" },
           { status: 400 }
         );
       }
-      
+
       const poolInstance = getPool();
-      const result = await poolInstance.query(`
+      const result = await poolInstance.query(
+        `
         SELECT 
           column_name,
           data_type,
@@ -314,21 +273,22 @@ export async function GET(request: Request) {
         FROM information_schema.columns
         WHERE table_name = $1
         ORDER BY ordinal_position
-      `, [tableName]);
-      
+      `,
+        [tableName]
+      );
+
       return NextResponse.json({
         success: true,
         schema: result.rows,
       });
     }
-    
+
     return NextResponse.json(
-      { success: false, error: 'Invalid action' },
+      { success: false, error: "Invalid action" },
       { status: 400 }
     );
-    
   } catch (error) {
-    console.error('Database error:', error);
+    console.error("Database error:", error);
     return NextResponse.json(
       { success: false, error: String(error) },
       { status: 500 }
@@ -337,58 +297,58 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
-    const dbUrl = process.env.DATABASE_URL;
-    
-    if (!dbUrl) {
+    if (!process.env.DATABASE_URL) {
       return NextResponse.json(
         { success: false, error: "DATABASE_URL not set" },
         { status: 500 }
       );
     }
-    
+
     const body = await request.json();
     const { action, tableName, columns } = body;
-    
+
     const poolInstance = getPool();
-    
-    if (action === 'createTable') {
-      // Validate inputs
+
+    if (action === "createTable") {
       if (!tableName || !columns || columns.length === 0) {
         return NextResponse.json(
-          { success: false, error: 'Table name and columns are required' },
+          { success: false, error: "Table name and columns are required" },
           { status: 400 }
         );
       }
-      
-      // Validate table name
+
       if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableName)) {
         return NextResponse.json(
-          { success: false, error: 'Invalid table name' },
+          { success: false, error: "Invalid table name" },
           { status: 400 }
         );
       }
-      
-      // Build CREATE TABLE query
+
       type CreateColumn = { name: string; type: string; constraints?: string };
       const cols = columns as CreateColumn[];
-      const columnDefinitions = cols.map((col) => {
-        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col.name)) {
-          throw new Error(`Invalid column name: ${col.name}`);
-        }
+      const columnDefinitions = cols
+        .map((col) => {
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(col.name)) {
+            throw new Error(`Invalid column name: ${col.name}`);
+          }
 
-        let def = `"${col.name}" ${col.type}`;
-        if (col.constraints && col.constraints.trim()) {
-          def += ` ${col.constraints}`;
-        }
-        return def;
-      }).join(", ");
-      
+          let def = `"${col.name}" ${col.type}`;
+          if (col.constraints && col.constraints.trim()) {
+            def += ` ${col.constraints}`;
+          }
+          return def;
+        })
+        .join(", ");
+
       const query = `CREATE TABLE IF NOT EXISTS "${tableName}" (${columnDefinitions})`;
-      
-      console.log('Executing query:', query);
+
+      console.log("Executing query:", query);
       await poolInstance.query(query);
-      
+
       return NextResponse.json({
         success: true,
         message: `Table '${tableName}' created successfully`,
@@ -414,6 +374,86 @@ export async function POST(request: Request) {
       return NextResponse.json({
         success: true,
         message: `Password updated for role ${String(username)}`,
+      });
+    }
+
+    if (action === "setVmDisplayName") {
+      const { displayName } = body as { displayName?: unknown };
+      if (displayName !== undefined && typeof displayName !== "string") {
+        return NextResponse.json(
+          { success: false, error: "displayName must be a string" },
+          { status: 400 }
+        );
+      }
+      const name =
+        typeof displayName === "string" ? displayName.trim().slice(0, 128) : "";
+      patchVmLocalSettings({ displayName: name === "" ? null : name });
+      return NextResponse.json({
+        success: true,
+        message: name ? "VM name saved." : "VM name cleared.",
+        vmDisplayName: name,
+      });
+    }
+
+    if (action === "setVmHostPort") {
+      const { host, port } = body as { host?: unknown; port?: unknown };
+      if (host !== undefined && typeof host !== "string") {
+        return NextResponse.json(
+          { success: false, error: "host must be a string" },
+          { status: 400 }
+        );
+      }
+      if (port !== undefined && typeof port !== "string") {
+        return NextResponse.json(
+          { success: false, error: "port must be a string" },
+          { status: 400 }
+        );
+      }
+      const h = typeof host === "string" ? host.trim() : "";
+      const p = typeof port === "string" ? port.trim() : "";
+      if (h.length > 255) {
+        return NextResponse.json(
+          { success: false, error: "Host is too long (max 255)." },
+          { status: 400 }
+        );
+      }
+      if (h && /[\s\u0000-\u001f]/.test(h)) {
+        return NextResponse.json(
+          { success: false, error: "Host cannot contain whitespace." },
+          { status: 400 }
+        );
+      }
+      if (p) {
+        if (!/^\d+$/.test(p)) {
+          return NextResponse.json(
+            { success: false, error: "Port must be a number." },
+            { status: 400 }
+          );
+        }
+        const n = parseInt(p, 10);
+        if (n < 1 || n > 65535) {
+          return NextResponse.json(
+            { success: false, error: "Port must be between 1 and 65535." },
+            { status: 400 }
+          );
+        }
+      }
+      const envParsed = getEnvParsed();
+      const hostPatch = h === "" || h === envParsed.host ? null : h;
+      const portPatch = p === "" || p === envParsed.port ? null : p;
+      patchVmLocalSettings({
+        host: hostPatch,
+        port: portPatch,
+      });
+      resetPool();
+      const next = getEffectiveParsed();
+      return NextResponse.json({
+        success: true,
+        message: "Connection host/port saved. This app now uses the new target.",
+        db: {
+          host: next.host,
+          port: next.port,
+        },
       });
     }
 
@@ -447,12 +487,11 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { success: false, error: 'Invalid action' },
+      { success: false, error: "Invalid action" },
       { status: 400 }
     );
-    
   } catch (error) {
-    console.error('Error in POST:', error);
+    console.error("Error in POST:", error);
     return NextResponse.json(
       { success: false, error: String(error) },
       { status: 500 }

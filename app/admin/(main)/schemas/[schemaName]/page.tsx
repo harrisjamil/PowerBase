@@ -19,7 +19,16 @@ import {
   Plus,
   Edit,
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  X,
+  ChevronDown,
+  ChevronRight,
+  HelpCircle,
+  ExternalLink,
+  Play,
+  Save,
+  Columns,
+  Link2
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -41,6 +50,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+
 
 interface Table {
   table_name: string
@@ -110,6 +120,24 @@ export default function SchemaTablesPage() {
     data_type: 'VARCHAR(255)',
     is_nullable: true,
     column_default: ''
+  })
+
+  // Table CRUD states
+  const [isCreateTableOpen, setIsCreateTableOpen] = useState(false)
+  const [isDeleteTableOpen, setIsDeleteTableOpen] = useState(false)
+  const [isCreatingTable, setIsCreatingTable] = useState(false)
+  const [isDeletingTable, setIsDeletingTable] = useState(false)
+  const [tableToDelete, setTableToDelete] = useState<Table | null>(null)
+  const [tableFormData, setTableFormData] = useState({
+    table_name: '',
+    description: '',
+    columns: [{ 
+      column_name: '', 
+      data_type: 'VARCHAR(255)', 
+      is_nullable: true, 
+      column_default: '', 
+      is_primary_key: false 
+    }]
   })
 
   // Fetch schema info and tables
@@ -316,6 +344,69 @@ export default function SchemaTablesPage() {
     }
   }
 
+  // Table CRUD functions
+  const handleCreateTable = async () => {
+    if (!tableFormData.table_name) {
+      toast.error('Table name is required')
+      return
+    }
+
+    if (tableFormData.columns.length === 0 || !tableFormData.columns[0].column_name) {
+      toast.error('At least one column is required')
+      return
+    }
+
+    setIsCreatingTable(true)
+    try {
+      const response = await fetch(`/api/schemas/${encodeURIComponent(schemaName)}/tables`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tableFormData)
+      })
+      
+      const data = await response.json()
+      
+      if (data.success) {
+        toast.success(`Table ${tableFormData.table_name} created successfully`)
+        setIsCreateTableOpen(false)
+        resetTableForm()
+        await fetchSchemaData()
+      } else {
+        throw new Error(data.error)
+      }
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to create table')
+    } finally {
+      setIsCreatingTable(false)
+    }
+  }
+
+  const handleDeleteTable = async () => {
+    if (!tableToDelete) return
+
+    setIsDeletingTable(true)
+    try {
+      const response = await fetch(`/api/schemas/${encodeURIComponent(schemaName)}/tables?table_name=${encodeURIComponent(tableToDelete.table_name)}&cascade=false`, {
+        method: 'DELETE'
+      })
+      
+      const data = await response.json()
+      
+      if (data.success) {
+        toast.success(`Table ${tableToDelete.table_name} deleted successfully`)
+        setIsDeleteTableOpen(false)
+        setTableToDelete(null)
+        await fetchSchemaData()
+      } else {
+        throw new Error(data.error)
+      }
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to delete table')
+    } finally {
+      setIsDeletingTable(false)
+    }
+  }
+
   const openAddColumnDialog = () => {
     resetColumnForm()
     setIsAddColumnOpen(true)
@@ -337,6 +428,11 @@ export default function SchemaTablesPage() {
     setIsDeleteColumnOpen(true)
   }
 
+  const openDeleteTableDialog = (table: Table) => {
+    setTableToDelete(table)
+    setIsDeleteTableOpen(true)
+  }
+
   const resetColumnForm = () => {
     setColumnFormData({
       column_name: '',
@@ -345,6 +441,44 @@ export default function SchemaTablesPage() {
       column_default: ''
     })
     setSelectedColumn(null)
+  }
+
+  const addTableColumn = () => {
+    setTableFormData({
+      ...tableFormData,
+      columns: [...tableFormData.columns, { 
+        column_name: '', 
+        data_type: 'VARCHAR(255)', 
+        is_nullable: true, 
+        column_default: '',
+        is_primary_key: false
+      }]
+    })
+  }
+
+  const removeTableColumn = (index: number) => {
+    const newColumns = tableFormData.columns.filter((_, i) => i !== index)
+    setTableFormData({ ...tableFormData, columns: newColumns })
+  }
+
+  const updateTableColumn = (index: number, field: string, value: any) => {
+    const newColumns = [...tableFormData.columns]
+    newColumns[index] = { ...newColumns[index], [field]: value }
+    setTableFormData({ ...tableFormData, columns: newColumns })
+  }
+
+  const resetTableForm = () => {
+    setTableFormData({
+      table_name: '',
+      description: '',
+      columns: [{ 
+        column_name: '', 
+        data_type: 'VARCHAR(255)', 
+        is_nullable: true, 
+        column_default: '', 
+        is_primary_key: false 
+      }]
+    })
   }
 
   const filteredTables = tables.filter(table =>
@@ -392,14 +526,20 @@ export default function SchemaTablesPage() {
             )}
           </div>
         </div>
-        <Button onClick={refreshData} disabled={refreshing} variant="outline" className="gap-2">
-          {refreshing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setIsCreateTableOpen(true)} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Create Table
+          </Button>
+          <Button onClick={refreshData} disabled={refreshing} variant="outline" className="gap-2">
+            {refreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Schema Info Cards */}
@@ -458,6 +598,14 @@ export default function SchemaTablesPage() {
             <div className="text-center py-12 text-muted-foreground">
               <TableIcon className="h-12 w-12 mx-auto mb-3 opacity-50" />
               <p>No tables found in this schema</p>
+              <Button 
+                onClick={() => setIsCreateTableOpen(true)} 
+                variant="outline" 
+                className="mt-4 gap-2"
+              >
+                <Plus className="h-4 w-4" />
+                Create your first table
+              </Button>
             </div>
           ) : (
             <div className="space-y-3">
@@ -510,6 +658,18 @@ export default function SchemaTablesPage() {
                     >
                       <Download className="h-4 w-4" />
                     </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      className="text-red-600 hover:text-red-700"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        openDeleteTableDialog(table)
+                      }}
+                      title="Delete table"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => handleViewTable(table)}>
                       <Eye className="h-4 w-4 mr-1" />
                       View
@@ -521,6 +681,278 @@ export default function SchemaTablesPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Right Sidebar Drawer for Create Table */}
+<div
+  className={`fixed inset-0 z-50 transition-all duration-300 ${
+    isCreateTableOpen ? 'pointer-events-auto' : 'pointer-events-none'
+  }`}
+>
+  {/* Backdrop */}
+  <div
+    className={`absolute inset-0 bg-black transition-opacity duration-300 ${
+      isCreateTableOpen ? 'opacity-50' : 'opacity-0'
+    }`}
+    onClick={() => setIsCreateTableOpen(false)}
+  />
+  
+  {/* Drawer */}
+  <div
+    className={`absolute right-0 top-0 h-full w-full sm:w-[600px] lg:w-[700px] bg-white dark:bg-gray-950 shadow-xl transition-transform duration-300 ease-in-out transform ${
+      isCreateTableOpen ? 'translate-x-0' : 'translate-x-full'
+    }`}
+  >
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b p-4 sticky top-0 bg-white dark:bg-gray-950 z-10">
+        <div>
+          <h2 className="text-lg font-semibold">Create a new table</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">Under schema "{schemaName}"</p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setIsCreateTableOpen(false)}
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+      
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="p-6 space-y-6">
+          {/* Table Name */}
+          <div>
+      <Label className="text-sm font-medium">Name</Label>
+      <Input
+        value={tableFormData.table_name}
+        onChange={(e) => setTableFormData({...tableFormData, table_name: e.target.value})}
+        placeholder="Enter table name"
+        className="mt-1.5"
+        disabled={isCreatingTable}
+      />
+    </div>
+
+    {/* Description */}
+    <div>
+      <Label className="text-sm font-medium">Description</Label>
+      <p className="text-xs text-muted-foreground mb-1.5">Optional</p>
+      <Input
+        value={tableFormData.description}
+        onChange={(e) => setTableFormData({...tableFormData, description: e.target.value})}
+        placeholder="Add a description for this table"
+        disabled={isCreatingTable}
+      />
+    </div>
+
+          {/* RLS Toggle */}
+          <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border">
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Enable Row Level Security (RLS)</span>
+                <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
+                  RECOMMENDED
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Restrict access to your table by enabling RLS and writing Postgres policies.
+              </p>
+            </div>
+            <div className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors data-[state=checked]:bg-primary data-[state=unchecked]:bg-input">
+              <input
+                type="checkbox"
+                className="peer absolute h-4 w-4 cursor-pointer opacity-0"
+                checked={true}
+                readOnly
+              />
+              <span className="pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0.5" />
+            </div>
+          </div>
+
+          {/* Policies Warning */}
+          <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+            <div className="flex gap-2">
+              <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5" />
+              <div>
+                <p className="text-sm text-yellow-800 dark:text-yellow-200 font-medium">
+                  Policies are required to query data
+                </p>
+                <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
+                  You need to create an access policy before you can query data from this table. 
+                  Without a policy, querying this table will return an empty array of results. 
+                  You can create policies after saving this table.
+                </p>
+                <Button variant="link" className="text-xs text-yellow-800 dark:text-yellow-200 h-auto p-0 mt-1">
+                  Documentation
+                  <ExternalLink className="h-3 w-3 ml-1" />
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Enable Realtime */}
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sm font-medium">Enable Realtime</span>
+              <p className="text-xs text-muted-foreground">
+                Broadcast changes on this table to authorized subscribers.
+              </p>
+            </div>
+            <div className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors data-[state=checked]:bg-primary data-[state=unchecked]:bg-input">
+              <input
+                type="checkbox"
+                className="peer absolute h-4 w-4 cursor-pointer opacity-0"
+              />
+              <span className="pointer-events-none block h-4 w-4 rounded-full bg-background shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0.5" />
+            </div>
+          </div>
+
+          {/* Columns Section Header */}
+          <div className="pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Columns className="h-4 w-4 text-muted-foreground" />
+                <h3 className="font-medium">Columns</h3>
+              </div>
+              <Button 
+                size="sm" 
+                onClick={addTableColumn} 
+                variant="outline"
+                type="button"
+                className="gap-1"
+              >
+                <Plus className="h-3 w-3" />
+                Add column
+              </Button>
+            </div>
+            
+            <div className="space-y-3">
+              {tableFormData.columns.map((column, index) => (
+                <div key={index} className="border rounded-lg overflow-hidden">
+                  <div className="bg-muted/30 px-3 py-2 border-b flex items-center justify-between">
+                    <span className="text-sm font-medium">Column {index + 1}</span>
+                    {index > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeTableColumn(index)}
+                        className="text-red-600 hover:text-red-700 h-6 px-2"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
+                  <div className="p-3 space-y-3">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="col-span-1">
+                        <Label className="text-xs text-muted-foreground">Name</Label>
+                        <Input
+                          value={column.column_name}
+                          onChange={(e) => updateTableColumn(index, 'column_name', e.target.value)}
+                          placeholder="column_name"
+                          className="mt-1 h-8 text-sm"
+                          disabled={isCreatingTable}
+                        />
+                      </div>
+                      <div className="col-span-1">
+                        <Label className="text-xs text-muted-foreground">Type</Label>
+                        <Select 
+                          value={column.data_type} 
+                          onValueChange={(value) => updateTableColumn(index, 'data_type', value)}
+                        >
+                          <SelectTrigger className="mt-1 h-8 text-sm">
+                            <SelectValue placeholder="Select type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {dataTypes.map(type => (
+                              <SelectItem key={type} value={type}>{type}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="col-span-1">
+                        <Label className="text-xs text-muted-foreground">Default Value</Label>
+                        <Input
+                          value={column.column_default}
+                          onChange={(e) => updateTableColumn(index, 'column_default', e.target.value)}
+                          placeholder="NULL"
+                          className="mt-1 h-8 text-sm font-mono"
+                          disabled={isCreatingTable}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!column.is_nullable}
+                          onChange={(e) => updateTableColumn(index, 'is_nullable', !e.target.checked)}
+                          className="h-3.5 w-3.5"
+                        />
+                        <span className="text-muted-foreground">Is not nullable</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={column.is_primary_key}
+                          onChange={(e) => updateTableColumn(index, 'is_primary_key', e.target.checked)}
+                          className="h-3.5 w-3.5"
+                        />
+                        <span className="text-muted-foreground">Primary Key</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Foreign Keys Section (collapsible) */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between p-3 cursor-pointer hover:bg-muted/30">
+              <div className="flex items-center gap-2">
+                <Link2 className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Foreign keys</span>
+              </div>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs gap-1">
+                <Plus className="h-3 w-3" />
+                Add foreign key relation
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* Footer */}
+      <div className="border-t p-4 flex gap-2 justify-end bg-white dark:bg-gray-950">
+        <Button 
+          variant="outline" 
+          onClick={() => setIsCreateTableOpen(false)} 
+          disabled={isCreatingTable}
+        >
+          Cancel
+        </Button>
+        <Button 
+          onClick={handleCreateTable} 
+          disabled={isCreatingTable || !tableFormData.table_name || !tableFormData.columns[0]?.column_name}
+          className="gap-2"
+        >
+          {isCreatingTable ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Creating...
+            </>
+          ) : (
+            <>
+              <Save className="h-4 w-4" />
+              Save
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  </div>
+</div>
 
       {/* Table Details Dialog with Column CRUD */}
       <Dialog open={isTableDetailsOpen} onOpenChange={setIsTableDetailsOpen}>
@@ -839,6 +1271,48 @@ export default function SchemaTablesPage() {
                 </>
               ) : (
                 'Delete Column'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Table Dialog */}
+      <Dialog open={isDeleteTableOpen} onOpenChange={setIsDeleteTableOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertTriangle className="h-5 w-5" />
+              Delete Table
+            </DialogTitle>
+            <DialogDescription>
+              This action cannot be undone. This will permanently delete the table and all its data.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {tableToDelete && (
+            <div className="py-4">
+              <p className="text-sm">
+                Are you sure you want to delete table <span className="font-semibold">{tableToDelete.table_name}</span>?
+              </p>
+              <p className="text-sm text-muted-foreground mt-2">
+                This will delete all {tableToDelete.row_count.toLocaleString()} rows and related objects.
+              </p>
+            </div>
+          )}
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDeleteTableOpen(false)} disabled={isDeletingTable}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteTable} disabled={isDeletingTable}>
+              {isDeletingTable ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete Table'
               )}
             </Button>
           </DialogFooter>

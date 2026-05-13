@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  /** Native addon + optional deps; do not bundle ssh2 for API routes. */
+  serverExternalPackages: ["ssh2"],
 };
 
 export default nextConfig;

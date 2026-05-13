@@ -102,6 +102,8 @@ export default function SchemasPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [refreshing, setRefreshing] = useState(false)
+  const [currentControlSchema, setCurrentControlSchema] = useState<string>("seung_control")
+  const [savingControlSchema, setSavingControlSchema] = useState<string | null>(null)
   const [selectedSchema, setSelectedSchema] = useState<Schema | null>(null)
   const [selectedTable, setSelectedTable] = useState<Table | null>(null)
   const router = useRouter()
@@ -170,6 +172,18 @@ export default function SchemasPage() {
       }
     } catch (error) {
       console.error('Error fetching users:', error)
+    }
+  }
+
+  const fetchControlSchema = async () => {
+    try {
+      const response = await fetch("/api/control-schema")
+      const data = await response.json()
+      if (data.success && typeof data.controlSchema === "string") {
+        setCurrentControlSchema(data.controlSchema)
+      }
+    } catch (error) {
+      console.error("Error fetching control schema:", error)
     }
   }
 
@@ -303,7 +317,7 @@ export default function SchemasPage() {
 
   const refreshData = async () => {
     setRefreshing(true)
-    await fetchSchemas()
+    await Promise.all([fetchSchemas(), fetchControlSchema()])
     setSchemaTablesMap({})
     setExpandedSchemas(new Set())
     setRefreshing(false)
@@ -312,6 +326,7 @@ export default function SchemasPage() {
   useEffect(() => {
     fetchSchemas()
     fetchDbUsers()
+    fetchControlSchema()
   }, [])
 
   const toggleSchema = async (schemaName: string) => {
@@ -335,6 +350,32 @@ export default function SchemasPage() {
     setSelectedTable(table)
     await fetchTableColumns(schemaName, table.table_name)
     setIsTableDetailsOpen(true)
+  }
+
+  const handleSetControlSchema = async (schemaName: string) => {
+    setSavingControlSchema(schemaName)
+    try {
+      const response = await fetch("/api/control-schema", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ schemaName }),
+      })
+      const data = await response.json()
+      if (data.success) {
+        setCurrentControlSchema(schemaName)
+        toast.success(data.message || `Control schema set to ${schemaName}`, {
+          description: "Please log in again so the new control schema takes effect.",
+        })
+        router.replace("/admin/login")
+        router.refresh()
+      } else {
+        throw new Error(data.error || "Failed to set control schema")
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Failed to set control schema")
+    } finally {
+      setSavingControlSchema(null)
+    }
   }
 
   const handleCreateSchema = async () => {
@@ -516,6 +557,15 @@ export default function SchemasPage() {
             Total schemas in database: {schemas.length}
           </CardDescription>
         </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span>Current control schema for credentials/logins:</span>
+            <Badge className="gap-1">
+              <Key className="h-3.5 w-3.5" />
+              {currentControlSchema}
+            </Badge>
+          </div>
+        </CardContent>
       </Card>
 
       {/* Search */}
@@ -561,6 +611,12 @@ export default function SchemasPage() {
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold">{schema.schema_name}</h3>
                         <Badge variant="secondary">{schema.table_count} {schema.table_count === 1 ? 'table' : 'tables'}</Badge>
+                        {currentControlSchema === schema.schema_name ? (
+                          <Badge className="gap-1">
+                            <Key className="h-3.5 w-3.5" />
+                            Control schema
+                          </Badge>
+                        ) : null}
                       </div>
                       {schema.description && (
                         <p className="text-sm text-muted-foreground">{schema.description}</p>
@@ -572,6 +628,18 @@ export default function SchemasPage() {
                       <div className="text-sm font-medium">{schema.total_size}</div>
                       <div className="text-xs text-muted-foreground">Owner: {schema.owner}</div>
                     </div>
+                    <Button 
+                      variant={currentControlSchema === schema.schema_name ? "secondary" : "outline"}
+                      size="sm"
+                      disabled={savingControlSchema === schema.schema_name || currentControlSchema === schema.schema_name}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void handleSetControlSchema(schema.schema_name)
+                      }}
+                    >
+                      <Key className="h-4 w-4 mr-1" />
+                      {savingControlSchema === schema.schema_name ? "Saving..." : currentControlSchema === schema.schema_name ? "Selected" : "Use for login"}
+                    </Button>
                     <Button 
                       variant="ghost" 
                       size="sm"
@@ -600,6 +668,10 @@ export default function SchemasPage() {
                         className="text-red-600 hover:text-red-700"
                         onClick={(e) => {
                           e.stopPropagation()
+                          if (schema.schema_name === currentControlSchema) {
+                            toast.error("Select another control schema before deleting this one.")
+                            return
+                          }
                           openDeleteDialog(schema)
                         }}
                       >

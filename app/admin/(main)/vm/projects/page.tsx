@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import Link from "next/link"
+import { useCallback, useEffect, useState } from "react"
 import {
   FolderKanban,
   Plus,
@@ -44,27 +45,13 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
-import { CreateProjectModal, ProjectFormData } from "@/components/modals/CreateProjectModal"
-
-type Project = {
-  id: string
-  name: string
-  description: string | null
-  status: "active" | "archived" | "draft"
-  created_at: string
-  updated_at: string
-  owner: string
-  member_count: number
-  region?: string
-  postgresType?: string
-}
-
-type ProjectStats = {
-  total: number
-  active: number
-  archived: number
-  draft: number
-}
+import {
+  getVmProjectStats,
+  loadVmProjects,
+  saveVmProjects,
+  type VmProject as Project,
+  type VmProjectStats as ProjectStats,
+} from "@/lib/vm-projects"
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([])
@@ -72,7 +59,6 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [activeTab, setActiveTab] = useState<"all" | "active" | "archived" | "draft">("all")
-  const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [formData, setFormData] = useState({
@@ -82,133 +68,37 @@ export default function ProjectsPage() {
   })
   const [saving, setSaving] = useState(false)
 
-  // Fetch projects - replace with your actual API
   const fetchProjects = async (): Promise<Project[]> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve([
-          {
-            id: "1",
-            name: "E-commerce Platform",
-            description: "Main online store with payment integration and inventory management",
-            status: "active",
-            created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-            updated_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-            owner: "alice@example.com",
-            member_count: 5,
-            region: "us-east-1",
-            postgresType: "postgres",
-          },
-          {
-            id: "2",
-            name: "Analytics Dashboard",
-            description: "Real-time business intelligence and reporting dashboard",
-            status: "active",
-            created_at: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-            updated_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-            owner: "bob@example.com",
-            member_count: 3,
-            region: "eu-west-1",
-          },
-          {
-            id: "3",
-            name: "Mobile App Backend",
-            description: "API services for iOS and Android applications",
-            status: "draft",
-            created_at: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-            updated_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-            owner: "alice@example.com",
-            member_count: 2,
-          },
-          {
-            id: "4",
-            name: "Legacy CRM",
-            description: "Customer relationship management system (deprecated)",
-            status: "archived",
-            created_at: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(),
-            updated_at: new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString(),
-            owner: "carol@example.com",
-            member_count: 0,
-          },
-        ])
-      }, 500)
-    })
+    return loadVmProjects()
   }
 
   const fetchStats = async (): Promise<ProjectStats> => {
-    return {
-      total: 4,
-      active: 2,
-      archived: 1,
-      draft: 1,
-    }
-  }
-
-  const createProject = async (data: ProjectFormData) => {
-    // Replace with your actual API call
-    console.log("Creating project with data:", data)
-    
-    // Simulate API call
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        const newProject: Project = {
-          id: String(Date.now()),
-          name: data.name,
-          description: data.description || null,
-          status: "active",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          owner: "current@user.com",
-          member_count: 1,
-          region: data.region,
-          postgresType: data.postgresType,
-        }
-        setProjects((prev) => [newProject, ...prev])
-        if (stats) {
-          setStats({
-            ...stats,
-            total: stats.total + 1,
-            active: stats.active + 1,
-          })
-        }
-        resolve()
-      }, 1000)
-    })
+    return getVmProjectStats(loadVmProjects())
   }
 
   const updateProject = async (id: string, data: Partial<typeof formData>) => {
+    void id
+    void data
     return true
   }
 
   const deleteProject = async (id: string) => {
+    void id
     return true
   }
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     const [projectsData, statsData] = await Promise.all([fetchProjects(), fetchStats()])
     setProjects(projectsData)
     setStats(statsData)
     setLoading(false)
-  }
+  }, [])
 
   const handleRefresh = async () => {
     setRefreshing(true)
     await loadData()
     setRefreshing(false)
-  }
-
-  const handleCreateProject = async (data: ProjectFormData) => {
-    setSaving(true)
-    try {
-      await createProject(data)
-      toast.success(`Project "${data.name}" created successfully`)
-      setShowCreateModal(false)
-    } catch (error) {
-      toast.error("Failed to create project")
-    } finally {
-      setSaving(false)
-    }
   }
 
   const handleEdit = async () => {
@@ -238,14 +128,8 @@ export default function ProjectsPage() {
             : p
         )
         setProjects(updatedProjects)
-
-        if (stats && selectedProject.status !== formData.status) {
-          setStats({
-            ...stats,
-            [selectedProject.status]: stats[selectedProject.status] - 1,
-            [formData.status]: stats[formData.status] + 1,
-          })
-        }
+        saveVmProjects(updatedProjects)
+        setStats(getVmProjectStats(updatedProjects))
 
         toast.success(`Project "${formData.name}" updated`)
         setShowEditModal(false)
@@ -253,7 +137,7 @@ export default function ProjectsPage() {
       } else {
         toast.error("Failed to update project")
       }
-    } catch (error) {
+    } catch {
       toast.error("Failed to update project")
     } finally {
       setSaving(false)
@@ -266,19 +150,15 @@ export default function ProjectsPage() {
     try {
       const success = await deleteProject(project.id)
       if (success) {
-        setProjects(projects.filter((p) => p.id !== project.id))
-        if (stats) {
-          setStats({
-            ...stats,
-            total: stats.total - 1,
-            [project.status]: stats[project.status] - 1,
-          })
-        }
+        const updatedProjects = projects.filter((p) => p.id !== project.id)
+        setProjects(updatedProjects)
+        saveVmProjects(updatedProjects)
+        setStats(getVmProjectStats(updatedProjects))
         toast.success(`Project "${project.name}" deleted`)
       } else {
         toast.error("Failed to delete project")
       }
-    } catch (error) {
+    } catch {
       toast.error("Failed to delete project")
     }
   }
@@ -294,7 +174,26 @@ export default function ProjectsPage() {
   }
 
   useEffect(() => {
-    loadData()
+    let cancelled = false
+
+    const loadInitialData = async () => {
+      setLoading(true)
+      const [projectsData, statsData] = await Promise.all([fetchProjects(), fetchStats()])
+
+      if (cancelled) {
+        return
+      }
+
+      setProjects(projectsData)
+      setStats(statsData)
+      setLoading(false)
+    }
+
+    void loadInitialData()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const getStatusBadge = (status: Project["status"]) => {
@@ -339,15 +238,17 @@ export default function ProjectsPage() {
             Projects
           </h1>
           <p className="text-sm text-muted-foreground">
-            Manage your organization's projects. Track status, members, and activity across all
+            Manage your organization&apos;s projects. Track status, members, and activity across all
             initiatives.
           </p>
         </div>
 
         <div className="flex gap-2">
-          <Button onClick={() => setShowCreateModal(true)} className="gap-2">
-            <Plus className="h-4 w-4" />
-            New project
+          <Button asChild className="gap-2">
+            <Link href="/admin/vm/projects/new">
+              <Plus className="h-4 w-4" />
+              New project
+            </Link>
           </Button>
           <Button onClick={handleRefresh} variant="outline" className="gap-2" disabled={refreshing}>
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
@@ -484,25 +385,14 @@ export default function ProjectsPage() {
             {filteredProjects.length === 0 && (
               <div className="p-8 text-center text-sm text-muted-foreground">
                 No projects found in this category.
-                <Button variant="link" className="ml-2" onClick={() => setShowCreateModal(true)}>
-                  Create one →
+                <Button asChild variant="link" className="ml-2">
+                  <Link href="/admin/vm/projects/new">Create one →</Link>
                 </Button>
               </div>
             )}
           </div>
         </TabsContent>
       </Tabs>
-
-      {/* Create Project Modal - Reusable Component */}
-      <CreateProjectModal
-        open={showCreateModal}
-        onOpenChange={setShowCreateModal}
-        onSubmit={handleCreateProject}
-        organizations={[
-          { id: "1", name: "Haris Mian's Org", plan: "Free" },
-        ]}
-        isSubmitting={saving}
-      />
 
       {/* Edit Project Dialog */}
       <Dialog open={showEditModal} onOpenChange={setShowEditModal}>

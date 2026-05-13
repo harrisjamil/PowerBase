@@ -1,31 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
+import { requireAdminRequest } from "@/lib/auth/session"
+import { getPool } from '@/lib/db'
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
-
+// GET - Fetch all tables in a schema
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string }> }
 ) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
-    // Await the params promise
     const { schemaName } = await params
     console.log(`Fetching tables for schema: ${schemaName}`)
     
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
-      // First, list all schemas to verify
-      const allSchemas = await client.query(`
-        SELECT nspname FROM pg_namespace 
-        WHERE nspname NOT LIKE 'pg_%' 
-        AND nspname != 'information_schema'
-        ORDER BY nspname
-      `)
-      console.log('Available schemas:', allSchemas.rows.map(r => r.nspname))
-      
       // Check if schema exists
       const schemaCheck = await client.query(
         'SELECT nspname FROM pg_namespace WHERE nspname = $1',
@@ -34,6 +25,7 @@ export async function GET(
       
       if (schemaCheck.rows.length === 0) {
         console.log(`Schema ${schemaName} not found`)
+        client.release()
         return NextResponse.json({
           success: true,
           tables: [],
@@ -63,8 +55,7 @@ export async function GET(
       `
       
       const result = await client.query(query, [schemaName])
-      console.log(`Found ${result.rows.length} tables in schema ${schemaName}:`, 
-        result.rows.map(r => ({ name: r.table_name, type: r.table_type })))
+      console.log(`Found ${result.rows.length} tables in schema ${schemaName}`)
       
       client.release()
       
@@ -82,7 +73,142 @@ export async function GET(
   } catch (error: any) {
     console.error('Database error:', error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch tables', details: error.message },
+      { 
+        success: false, 
+        error: 'Failed to fetch tables', 
+        details: error.message 
+      },
+      { status: 500 }
+    )
+  }
+}
+
+// POST - Create a new table
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ schemaName: string }> }
+) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
+  try {
+    const { schemaName } = await params
+    const body = await request.json()
+    const { table_name, description, columns } = body
+
+    if (!table_name || !columns || columns.length === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Table name and at least one column are required' },
+        { status: 400 }
+      )
+    }
+
+    const client = await getPool().connect()
+    
+    try {
+      await client.query('BEGIN')
+      
+      // Build CREATE TABLE statement
+      let createTableSQL = `CREATE TABLE "${schemaName}"."${table_name}" (\n`
+      
+      const columnDefinitions = columns.map((col: any) => {
+        let def = `  "${col.column_name}" ${col.data_type.toUpperCase()}`
+        
+        if (!col.is_nullable) {
+          def += ` NOT NULL`
+        }
+        
+        if (col.column_default && col.column_default !== '') {
+          def += ` DEFAULT ${col.column_default}`
+        }
+        
+        if (col.is_primary_key) {
+          def += ` PRIMARY KEY`
+        }
+        
+        return def
+      })
+      
+      createTableSQL += columnDefinitions.join(',\n')
+      createTableSQL += `\n)`
+      
+      console.log('Creating table with SQL:', createTableSQL)
+      await client.query(createTableSQL)
+      
+      // Add comment if description provided - FIXED: escape the description string
+      if (description && description.trim()) {
+        // Escape single quotes in description
+        const escapedDescription = description.replace(/'/g, "''")
+        await client.query(`COMMENT ON TABLE "${schemaName}"."${table_name}" IS '${escapedDescription}'`)
+      }
+      
+      await client.query('COMMIT')
+      client.release()
+      
+      return NextResponse.json({
+        success: true,
+        message: `Table ${table_name} created successfully`,
+        table_name
+      })
+      
+    } catch (error) {
+      await client.query('ROLLBACK')
+      client.release()
+      throw error
+    }
+    
+  } catch (error: any) {
+    console.error('Error creating table:', error)
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to create table' },
+      { status: 500 }
+    )
+  }
+}
+
+// DELETE - Drop a table
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ schemaName: string }> }
+) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
+  try {
+    const { schemaName } = await params
+    const { searchParams } = new URL(request.url)
+    const table_name = searchParams.get('table_name')
+    const cascade = searchParams.get('cascade') === 'true'
+
+    if (!table_name) {
+      return NextResponse.json(
+        { success: false, error: 'Table name is required' },
+        { status: 400 }
+      )
+    }
+
+    const client = await getPool().connect()
+    
+    try {
+      const dropSQL = `DROP TABLE "${schemaName}"."${table_name}"${cascade ? ' CASCADE' : ''}`
+      console.log('Deleting table with SQL:', dropSQL)
+      await client.query(dropSQL)
+      client.release()
+      
+      return NextResponse.json({
+        success: true,
+        message: `Table ${table_name} deleted successfully`
+      })
+      
+    } catch (error) {
+      client.release()
+      throw error
+    }
+    
+  } catch (error: any) {
+    console.error('Error deleting table:', error)
+    return NextResponse.json(
+      { success: false, error: error.message || 'Failed to delete table' },
       { status: 500 }
     )
   }

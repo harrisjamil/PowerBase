@@ -16,14 +16,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { LayoutDashboardIcon, ListIcon, ChartBarIcon, FolderIcon, UsersIcon, CameraIcon, FileTextIcon, Settings2Icon, CircleHelpIcon, SearchIcon, DatabaseIcon, FileChartColumnIcon, FileIcon, CommandIcon, ServerIcon, UserIcon, CircleUserRoundIcon, TableIcon } from "lucide-react"
+import { LayoutDashboardIcon, FolderIcon, UsersIcon, CameraIcon, FileTextIcon, Settings2Icon, CircleHelpIcon, SearchIcon, DatabaseIcon, FileChartColumnIcon, FileIcon, CommandIcon, ServerIcon, CircleUserRoundIcon } from "lucide-react"
 
 const data = {
-  user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
-  },
   navMain: [
     {
       title: "Dashboard",
@@ -50,7 +45,14 @@ const data = {
         <ServerIcon
         />
       ),
-      items: [{ title: "Overview", url: "/admin/vm" }, { title: "Projects", url: "/admin/vm/projects" }, { title: "Schemas", url: "/admin/schemas" }, { title: "Consumers", url: "/admin/consumers" }],
+      items: [
+        { title: "Overview", url: "/admin/vm" },
+        { title: "Terminal", url: "/admin/vm/terminal" },
+        { title: "Projects", url: "/admin/vm/projects" },
+        { title: "Schemas", url: "/admin/schemas" },
+        { title: "Visualizer", url: "/admin/schemas/visualizer" },
+        { title: "Consumers", url: "/admin/consumers" },
+      ],
 
     },
     {
@@ -181,7 +183,18 @@ const data = {
   ],
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar({
+  currentUser,
+  ...props
+}: React.ComponentProps<typeof Sidebar> & {
+  currentUser?: { name: string; email: string; avatar?: string }
+}) {
+  const resolvedUser = currentUser ?? {
+    name: "Admin",
+    email: "admin@example.com",
+    avatar: "",
+  }
+
   return (
     <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
@@ -205,7 +218,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser
+          user={{
+            name: resolvedUser.name,
+            email: resolvedUser.email,
+            avatar: resolvedUser.avatar ?? "",
+          }}
+        />
       </SidebarFooter>
     </Sidebar>
   )

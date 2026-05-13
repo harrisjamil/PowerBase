@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Pool } from 'pg'
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-})
+import { requireAdminRequest } from "@/lib/auth/session"
+import { getPool } from '@/lib/db'
 
 // GET - Fetch all columns
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const { schemaName, tableName } = await params
     console.log(`Fetching columns for ${schemaName}.${tableName}`)
     
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       const query = `
@@ -69,6 +69,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const { schemaName, tableName } = await params
     const body = await request.json()
@@ -81,7 +84,7 @@ export async function POST(
       )
     }
 
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       let alterQuery = `ALTER TABLE "${schemaName}"."${tableName}" ADD COLUMN "${column_name}" ${data_type.toUpperCase()}`
@@ -94,6 +97,7 @@ export async function POST(
         alterQuery += ` DEFAULT ${column_default}`
       }
       
+      console.log('Adding column with SQL:', alterQuery)
       await client.query(alterQuery)
       client.release()
       
@@ -116,11 +120,14 @@ export async function POST(
   }
 }
 
-// PUT - Update a column (rename, change data type, or modify constraints)
+// PUT - Update a column
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const { schemaName, tableName } = await params
     const body = await request.json()
@@ -133,7 +140,7 @@ export async function PUT(
       )
     }
 
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
       await client.query('BEGIN')
@@ -173,7 +180,7 @@ export async function PUT(
       
       return NextResponse.json({
         success: true,
-        message: `Column ${currentColumnName} updated successfully`
+        message: `Column updated successfully`
       })
       
     } catch (error) {
@@ -196,6 +203,9 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
+  const auth = requireAdminRequest(request)
+  if (!auth.ok) return auth.response
+
   try {
     const { schemaName, tableName } = await params
     const { searchParams } = new URL(request.url)
@@ -208,10 +218,12 @@ export async function DELETE(
       )
     }
 
-    const client = await pool.connect()
+    const client = await getPool().connect()
     
     try {
-      await client.query(`ALTER TABLE "${schemaName}"."${tableName}" DROP COLUMN "${column_name}"`)
+      const dropSQL = `ALTER TABLE "${schemaName}"."${tableName}" DROP COLUMN "${column_name}"`
+      console.log('Deleting column with SQL:', dropSQL)
+      await client.query(dropSQL)
       client.release()
       
       return NextResponse.json({

@@ -1,21 +1,7 @@
-"use client"
-import PageLoader from "@/components/page-loader"
-import { useRouter } from "next/navigation"
-import { useEffect } from "react"
+import { redirect } from "next/navigation"
+import { getAdminSession } from "@/lib/auth/session"
 
-export default function HomePage() {
-  const router = useRouter()
-
-  useEffect(() => {
-    const isLoggedIn = localStorage.getItem("isLoggedIn")
-    const token = localStorage.getItem("authToken")
-
-    if (isLoggedIn === "true" && token) {
-      router.push("/admin/dashboard")
-    } else {
-      router.push("/admin/login")
-    }
-  }, [router])
-
-  return <PageLoader message="Redirecting…" />
+export default async function HomePage() {
+  const session = await getAdminSession()
+  redirect(session ? "/admin/dashboard" : "/admin/login")
 }

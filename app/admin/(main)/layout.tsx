@@ -1,7 +1,3 @@
-"use client"
-
-import * as React from "react"
-
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -9,12 +5,25 @@ import {
   SidebarInset,
   SidebarProvider,
 } from "@/components/ui/sidebar"
+import { getAdminSession } from "@/lib/auth/session"
+import { redirect } from "next/navigation"
+import type { CSSProperties, ReactNode } from "react"
 
-export default function AdminMainLayout({
+function getDisplayName(email: string) {
+  const [name] = email.split("@")
+  return name || email
+}
+
+export default async function AdminMainLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: ReactNode
 }) {
+  const session = await getAdminSession()
+  if (!session) {
+    redirect("/admin/login")
+  }
+
   return (
     <TooltipProvider>
       <SidebarProvider
@@ -22,10 +31,16 @@ export default function AdminMainLayout({
           {
             "--sidebar-width": "calc(var(--spacing) * 72)",
             "--header-height": "calc(var(--spacing) * 12)",
-          } as React.CSSProperties
+          } as CSSProperties
         }
       >
-        <AppSidebar variant="inset" />
+        <AppSidebar
+          variant="inset"
+          currentUser={{
+            name: getDisplayName(session.email),
+            email: session.email,
+          }}
+        />
         <SidebarInset>
           <SiteHeader />
           <div className="flex flex-1 flex-col">

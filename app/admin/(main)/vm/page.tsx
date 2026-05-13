@@ -13,6 +13,8 @@ import {
   Info,
   Terminal,
   KeyRound,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -39,11 +41,14 @@ import { toast } from "sonner"
 
 type VMData = {
   success: boolean
+  vmDisplayName?: string
   db: {
     host: string
     port: string
     database: string
     user: string
+    envHost?: string
+    envPort?: string
     pgVersion: string
     dbSize: string
     activeConnections: number
@@ -90,9 +95,10 @@ function displayValue(v: string | number | string[] | undefined | null) {
 }
 
 const VM_DETAIL_ROWS: { key: string; label: string }[] = [
+  { key: "vmDisplayName", label: "Display name (local to this app)" },
   { key: "hostnameLabel", label: "Connection target (host:port)" },
-  { key: "connectionHost", label: "Host (from DATABASE_URL)" },
-  { key: "connectionPort", label: "Port (from DATABASE_URL)" },
+  { key: "connectionHost", label: "Host (app connection)" },
+  { key: "connectionPort", label: "Port (app connection)" },
   { key: "connectionDatabase", label: "Database (from DATABASE_URL)" },
   { key: "connectionUser", label: "User (from DATABASE_URL)" },
   { key: "serverIP", label: "Server bind address (inet_server_addr)" },
@@ -142,11 +148,26 @@ export default function VMPage() {
   const [createDb, setCreateDb] = useState(false)
   const [createUserSaving, setCreateUserSaving] = useState(false)
 
+  const [displayNameInput, setDisplayNameInput] = useState("")
+  const [displayNameSaving, setDisplayNameSaving] = useState(false)
+  const [hostInput, setHostInput] = useState("")
+  const [portInput, setPortInput] = useState("")
+  const [hostPortSaving, setHostPortSaving] = useState(false)
+  const [connUserPassword, setConnUserPassword] = useState("")
+  const [connUserPasswordSaving, setConnUserPasswordSaving] = useState(false)
+
   const fetchVM = async () => {
     try {
       const res = await fetch("/api/vm?action=info")
       const json = await res.json()
       setData(json)
+      if (json.success && typeof json.vmDisplayName === "string") {
+        setDisplayNameInput(json.vmDisplayName)
+      }
+      if (json.success && json.db) {
+        setHostInput(String(json.db.host ?? ""))
+        setPortInput(String(json.db.port ?? ""))
+      }
     } catch (err) {
       console.error("Failed to fetch VM:", err)
     }
@@ -248,6 +269,97 @@ export default function VMPage() {
     }
   }
 
+  const submitHostPort = async () => {
+    setHostPortSaving(true)
+    try {
+      const res = await fetch("/api/vm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setVmHostPort",
+          host: hostInput,
+          port: portInput,
+        }),
+      })
+      const json = await res.json()
+      if (json.success) {
+        toast.success(json.message || "Connection updated")
+        await Promise.all([
+          fetchVM(),
+          fetchVMInfo(),
+          fetchTables(),
+          fetchUsers(),
+          fetchStats(),
+        ])
+      } else {
+        toast.error(json.error || "Could not save host/port")
+      }
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setHostPortSaving(false)
+    }
+  }
+
+  const submitConnUserPassword = async () => {
+    if (!data?.db.user) return
+    if (!connUserPassword) {
+      toast.error("Enter a new password.")
+      return
+    }
+    setConnUserPasswordSaving(true)
+    try {
+      const res = await fetch("/api/vm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setUserPassword",
+          username: data.db.user,
+          password: connUserPassword,
+        }),
+      })
+      const json = await res.json()
+      if (json.success) {
+        toast.success(json.message || "Password updated on the server.")
+        setConnUserPassword("")
+        toast.info(
+          "If this app uses DATABASE_URL for the password, update that value (or redeploy secrets) to match, then restart."
+        )
+      } else {
+        toast.error(json.error || "Could not update password")
+      }
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setConnUserPasswordSaving(false)
+    }
+  }
+
+  const submitDisplayName = async () => {
+    setDisplayNameSaving(true)
+    try {
+      const res = await fetch("/api/vm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setVmDisplayName",
+          displayName: displayNameInput,
+        }),
+      })
+      const json = await res.json()
+      if (json.success) {
+        toast.success(json.message || "Saved")
+        await Promise.all([fetchVM(), fetchVMInfo()])
+      } else {
+        toast.error(json.error || "Could not save name")
+      }
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setDisplayNameSaving(false)
+    }
+  }
+
   const submitPasswordChange = async () => {
     if (!passwordDialogUser || !newPassword) {
       toast.error("Enter a new password.")
@@ -320,6 +432,8 @@ export default function VMPage() {
   const addColumn = () => {
     setNewColumns([...newColumns, { name: "", type: "VARCHAR(255)", constraints: "" }])
   }
+  const [isHostSectionOpen, setIsHostSectionOpen] = useState(false) // Default open
+  const [isPasswordSectionOpen, setIsPasswordSectionOpen] = useState(false) // Default closed
 
   const removeColumn = (index: number) => {
     setNewColumns(newColumns.filter((_, i) => i !== index))
@@ -391,7 +505,9 @@ export default function VMPage() {
         <div>
           <h1 className="text-lg font-semibold tracking-tight flex items-center gap-2">
             <Server className="h-5 w-5" />
-            VM & Database Dashboard
+            {data.vmDisplayName?.trim()
+              ? data.vmDisplayName.trim()
+              : "VM & Database Dashboard"}
           </h1>
           <p className="text-sm text-muted-foreground">
             PostgreSQL server details from your connection, tables, roles, and statistics. Host
@@ -410,6 +526,8 @@ export default function VMPage() {
           Refresh
         </Button>
       </div>
+
+     
 
       <Tabs
         value={activeTab}
@@ -527,6 +645,153 @@ export default function VMPage() {
               </div>
             </div>
           </div>
+
+          <div className="space-y-4">
+            <div className="border rounded-xl shadow-sm bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setIsHostSectionOpen(!isHostSectionOpen)}
+                className="w-full flex items-center justify-between p-6 hover:bg-muted/30 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <Server className="h-4 w-4" />
+                  <h2 className="text-sm font-semibold">Hostname, port, and label</h2>
+                </div>
+                {isHostSectionOpen ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+              </button>
+
+              {isHostSectionOpen && (
+                <div className="px-6 pb-6 pt-0 space-y-4">
+                  <p className="text-xs text-muted-foreground">
+                    Host and port override the server address from{" "}
+                    <code className="rounded bg-muted px-1">DATABASE_URL</code> for this app only
+                    (saved in{" "}
+                    <code className="rounded bg-muted px-1">.powerbase/vm-settings.json</code>
+                    ). Database name, user, and password still come from{" "}
+                    <code className="rounded bg-muted px-1">DATABASE_URL</code>. Set host and port to
+                    match your env values to clear overrides.
+                  </p>
+                  {data.db.envHost != null && data.db.envPort != null && (
+                    <p className="text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">DATABASE_URL</span> host:{" "}
+                      <span className="font-mono">
+                        {data.db.envHost}:{data.db.envPort}
+                      </span>
+                    </p>
+                  )}
+                  {data.db.envHost != null &&
+                    data.db.envPort != null &&
+                    (data.db.host !== data.db.envHost || data.db.port !== data.db.envPort) && (
+                      <p className="text-xs rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-950 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
+                        Overrides active: env is{" "}
+                        <span className="font-mono">
+                          {data.db.envHost}:{data.db.envPort}
+                        </span>
+                      </p>
+                    )}
+                  <div className="space-y-2">
+                    <Label htmlFor="vm-host">PostgreSQL hostname or IP</Label>
+                    <Input
+                      id="vm-host"
+                      value={hostInput}
+                      onChange={(e) => setHostInput(e.target.value)}
+                      placeholder="e.g. db.example.com or 127.0.0.1"
+                      autoComplete="off"
+                      maxLength={255}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="vm-port">Port</Label>
+                    <Input
+                      id="vm-port"
+                      value={portInput}
+                      onChange={(e) => setPortInput(e.target.value)}
+                      placeholder="5432"
+                      inputMode="numeric"
+                      maxLength={5}
+                    />
+                  </div>
+                  <Button
+                    onClick={submitHostPort}
+                    disabled={hostPortSaving}
+                    className="w-full sm:w-auto"
+                  >
+                    {hostPortSaving ? "Saving…" : "Save host and port"}
+                  </Button>
+
+                  <div className="border-t pt-4 space-y-2">
+                    <Label htmlFor="vm-display-name">Display name (optional)</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Shown in the page title only; does not change PostgreSQL.
+                    </p>
+                    <Input
+                      id="vm-display-name"
+                      value={displayNameInput}
+                      onChange={(e) => setDisplayNameInput(e.target.value)}
+                      placeholder="e.g. Production Postgres"
+                      maxLength={128}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={submitDisplayName}
+                      disabled={displayNameSaving}
+                      className="w-full sm:w-auto"
+                    >
+                      {displayNameSaving ? "Saving…" : "Save display name"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="border rounded-xl shadow-sm bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setIsPasswordSectionOpen(!isPasswordSectionOpen)}
+                className="w-full flex items-center justify-between p-6 hover:bg-muted/30 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4" />
+                  <h2 className="text-sm font-semibold">PostgreSQL login password</h2>
+                </div>
+                {isPasswordSectionOpen ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+              </button>
+
+              {isPasswordSectionOpen && (
+                <div className="px-6 pb-6 pt-0 space-y-4">
+                  <p className="text-xs text-muted-foreground">
+                    Runs <code className="rounded bg-muted px-1">ALTER ROLE … PASSWORD</code> for
+                    role <span className="font-mono">{data.db.user}</span> (the user in{" "}
+                    <code className="rounded bg-muted px-1">DATABASE_URL</code>). The app still
+                    authenticates with the password in that URL until you update it there (or in
+                    your host&apos;s secret store) and restart.
+                  </p>
+                  <div className="space-y-2">
+                    <Label htmlFor="conn-user-pw">New password</Label>
+                    <Input
+                      id="conn-user-pw"
+                      type="password"
+                      autoComplete="new-password"
+                      value={connUserPassword}
+                      onChange={(e) => setConnUserPassword(e.target.value)}
+                    />
+                  </div>
+                  <Button onClick={submitConnUserPassword} disabled={connUserPasswordSaving}>
+                    {connUserPasswordSaving ? "Updating…" : "Update password on server"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="users" className="flex flex-col gap-4">
@@ -580,6 +845,7 @@ export default function VMPage() {
             on the server. Your app connection user must have permission (often a superuser).
             Role names are restricted to letters, numbers, and underscore.
           </p>
+          
 
           <Dialog
             open={passwordDialogUser !== null}
