@@ -3,6 +3,7 @@ import {
   AGENTS_TABLE_NAME,
   getControlSchema,
   getQuotedAgentsTableRef,
+  getQuotedControlTableRef,
   quotePgIdentifier,
 } from "@/lib/control-schema"
 
@@ -11,6 +12,8 @@ export type AgentRecord = {
   email: string
   created_at: string | null
   has_password: boolean
+  superadmin_id: number | null
+  superadmin_email: string | null
 }
 
 export function readAgentEmail(value: unknown): string | null {
@@ -22,6 +25,7 @@ export function readAgentEmail(value: unknown): string | null {
 
 export async function ensureAgentsTable(client: PoolClient) {
   const tableRef = getQuotedAgentsTableRef()
+  const superadminRef = getQuotedControlTableRef()
   const sequenceName = `${AGENTS_TABLE_NAME}_id_seq`
   const sequenceRef = `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(sequenceName)}`
   const sequenceRegclassLiteral = `'${sequenceRef}'::regclass`
@@ -31,7 +35,8 @@ export async function ensureAgentsTable(client: PoolClient) {
       id serial PRIMARY KEY,
       email text NOT NULL,
       password text NOT NULL,
-      created_at timestamp NOT NULL DEFAULT now()
+      created_at timestamp NOT NULL DEFAULT now(),
+      superadmin_id integer NULL REFERENCES ${superadminRef} (id) ON DELETE SET NULL
     )
   `)
 
@@ -39,7 +44,8 @@ export async function ensureAgentsTable(client: PoolClient) {
     ALTER TABLE ${tableRef}
     ADD COLUMN IF NOT EXISTS email text,
     ADD COLUMN IF NOT EXISTS password text NOT NULL DEFAULT '',
-    ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now()
+    ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS superadmin_id integer NULL REFERENCES ${superadminRef} (id) ON DELETE SET NULL
   `)
 
   await client.query(`
@@ -78,5 +84,10 @@ export async function ensureAgentsTable(client: PoolClient) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS ${quotePgIdentifier(`${AGENTS_TABLE_NAME}_email_idx`)}
     ON ${tableRef} (lower(email))
+  `)
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ${quotePgIdentifier(`${AGENTS_TABLE_NAME}_superadmin_idx`)}
+    ON ${tableRef} (superadmin_id)
   `)
 }

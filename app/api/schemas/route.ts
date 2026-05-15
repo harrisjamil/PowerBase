@@ -1,408 +1,503 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from "next/server"
+import type { PoolClient } from "pg"
 import { requireAdminRequest } from "@/lib/auth/session"
-import { getPool } from '@/lib/db'
+import { requirePrincipalRequest } from "@/lib/auth/principal-session"
+import { getPool } from "@/lib/db"
+import { buildProjectSchemaName } from "@/lib/project-names"
 import {
   getControlSchema,
+  getQuotedProjectsTableRef,
   isSafePgIdentifier,
   quotePgIdentifier,
 } from "@/lib/control-schema"
+import { getAccessibleSchemaNamesForPrincipal } from "@/lib/principal-access"
 import {
-  assignSchemaOwner,
-  canAccessSchema,
-  ensureSchemaAccessTable,
-  getQuotedSchemaAccessTableRef,
-  getSuperadminById,
-  removeSchemaOwnerRecord,
-  renameSchemaOwnerRecord,
-} from "@/lib/schema-access"
-import {
+  canRoleAccessProjectSchema,
+  ensureProjectRoleAssignmentsTable,
   ensureProjectsTable,
+  getProjectRecordBySchemaName,
+  getQuotedProjectRoleAssignmentsTableRef,
+  listProjectRoleAssignments,
   removeProjectRecord,
   renameProjectRecord,
+  replaceProjectRoleAssignments,
   upsertProjectRecord,
 } from "@/lib/projects"
-import { getQuotedProjectsTableRef } from "@/lib/control-schema"
-
-function readOptionalSuperadminId(value: unknown): number | null | undefined {
-  if (value === undefined) return undefined
-  if (value === null || value === "") return null
-  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value
-  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value)
-  return undefined
-}
+import {
+  listMissingPostgresRoleNames,
+  readRoleNames,
+  syncProjectRoleSchemaAccess,
+} from "@/lib/postgres-roles"
 
 function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
 
+function readProjectName(value: unknown) {
+  if (typeof value !== "string") return undefined
+  const projectName = value.trim()
+  if (!projectName || projectName.length > 255) {
+    return null
+  }
+  return projectName
+}
+
+function readSchemaName(value: unknown) {
+  if (typeof value !== "string") return null
+  const schemaName = value.trim()
+  if (!schemaName || !isSafePgIdentifier(schemaName)) {
+    return null
+  }
+  return schemaName
+}
+
+function readOwnerRole(value: unknown) {
+  if (typeof value !== "string") return undefined
+  const owner = value.trim()
+  return owner || undefined
+}
+
+function readDescription(value: unknown) {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== "string") return undefined
+  const description = value.trim()
+  return description || null
+}
+
+async function schemaExists(client: PoolClient, schemaName: string) {
+  const result = await client.query<{ exists: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_namespace
+        WHERE nspname = $1
+      ) AS exists
+    `,
+    [schemaName]
+  )
+
+  return Boolean(result.rows[0]?.exists)
+}
+
+async function canAdminAccessSchema(client: PoolClient, roleName: string, schemaName: string) {
+  const project = await getProjectRecordBySchemaName(client, schemaName)
+  if (!project) {
+    return true
+  }
+
+  return canRoleAccessProjectSchema(client, roleName, schemaName)
+}
+
 // GET - Fetch all schemas
 export async function GET(request: NextRequest) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
+  const client = await getPool().connect()
   try {
-    const client = await getPool().connect()
-    
-    try {
-      await ensureSchemaAccessTable(client)
-      await ensureProjectsTable(client)
+    await ensureProjectsTable(client)
+    await ensureProjectRoleAssignmentsTable(client)
+    const accessibleSchemas = await getAccessibleSchemaNamesForPrincipal(client, auth.session)
 
-      // Improved query to get all schemas with accurate table counts
-      const query = `
-        SELECT 
-          n.nspname as schema_name,
-          projects.name as project_name,
-          COALESCE(pg_catalog.pg_get_userbyid(n.nspowner), 'unknown') as owner,
-          COUNT(DISTINCT c.oid) FILTER (WHERE c.relkind IN ('r', 'v', 'm', 'p') AND c.relname NOT LIKE 'pg_%') as table_count,
-          COALESCE(pg_catalog.pg_size_pretty(SUM(pg_total_relation_size(c.oid))), '0 bytes') as total_size,
-          pg_catalog.obj_description(n.oid) as description,
-          n.nspowner as owner_id,
-          access_map.superadmin_id as owner_superadmin_id,
-          owner_user.email as owner_superadmin_email
+    const result = await client.query<{
+      schema_name: string
+      project_name: string | null
+      owner: string
+      table_count: number
+      total_size: string
+      description: string | null
+      owner_id: number
+      creator_role_name: string | null
+      assigned_role_names: string[] | null
+      assigned_role_count: number
+    }>(
+      `
+        SELECT
+          n.nspname AS schema_name,
+          projects.id AS project_id,
+          projects.project_ref,
+          projects.name AS project_name,
+          COALESCE(pg_catalog.pg_get_userbyid(n.nspowner), 'unknown') AS owner,
+          COUNT(DISTINCT c.oid) FILTER (
+            WHERE c.relkind IN ('r', 'v', 'm', 'p') AND c.relname NOT LIKE 'pg_%'
+          )::int AS table_count,
+          COALESCE(pg_catalog.pg_size_pretty(SUM(pg_total_relation_size(c.oid))), '0 bytes') AS total_size,
+          pg_catalog.obj_description(n.oid) AS description,
+          n.nspowner AS owner_id,
+          projects.creator_role_name,
+          COALESCE(assignments.assigned_role_names, ARRAY[]::text[]) AS assigned_role_names,
+          COALESCE(array_length(assignments.assigned_role_names, 1), 0)::int AS assigned_role_count
         FROM pg_catalog.pg_namespace n
-        LEFT JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid 
+        LEFT JOIN pg_catalog.pg_class c
+          ON c.relnamespace = n.oid
           AND c.relkind IN ('r', 'v', 'm', 'p')
           AND c.relname NOT LIKE 'pg_%'
           AND c.relname NOT LIKE 'sql_%'
         LEFT JOIN ${getQuotedProjectsTableRef()} projects
           ON projects.schema_name = n.nspname
-        LEFT JOIN ${getQuotedSchemaAccessTableRef()} access_map
-          ON access_map.schema_name = n.nspname
-        LEFT JOIN ${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier("superadmin")} owner_user
-          ON owner_user.id = access_map.superadmin_id
+        LEFT JOIN LATERAL (
+          SELECT array_agg(assignments.role_name ORDER BY assignments.role_name) AS assigned_role_names
+          FROM ${getQuotedProjectRoleAssignmentsTableRef()} assignments
+          WHERE assignments.project_id = projects.id
+        ) assignments ON TRUE
         WHERE n.nspname NOT LIKE 'pg_%'
-          AND n.nspname != 'information_schema'
+          AND n.nspname <> 'information_schema'
           AND n.nspname NOT LIKE '%backup%'
-          AND (access_map.superadmin_id IS NULL OR access_map.superadmin_id = $1)
-        GROUP BY n.nspname, projects.name, n.nspowner, n.oid, access_map.superadmin_id, owner_user.email
+        GROUP BY
+          n.nspname,
+          n.nspowner,
+          n.oid,
+          projects.id,
+          projects.project_ref,
+          projects.name,
+          projects.creator_role_name,
+          assignments.assigned_role_names
         ORDER BY n.nspname
       `
-      
-      const result = await client.query(query, [auth.session.id])
-      client.release()
-      
-      return NextResponse.json({
-        success: true,
-        schemas: result.rows,
-        count: result.rows.length,
-        controlSchema: getControlSchema(),
-      })
-      
-    } catch (error) {
-      client.release()
-      throw error
-    }
-    
+    )
+
+    const visibleSchemas = result.rows.filter((schema) => accessibleSchemas.has(schema.schema_name))
+
+    return NextResponse.json({
+      success: true,
+      schemas: visibleSchemas,
+      count: visibleSchemas.length,
+      controlSchema: getControlSchema(),
+    })
   } catch (error) {
-    console.error('Database error:', error)
+    console.error("Database error:", error)
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch schemas' },
+      { success: false, error: "Failed to fetch schemas" },
       { status: 500 }
     )
+  } finally {
+    client.release()
   }
 }
 
-// POST - Create a new schema
+// POST - Create a new schema or a new project-backed schema
 export async function POST(request: NextRequest) {
   const auth = requireAdminRequest(request)
   if (!auth.ok) return auth.response
 
   try {
-    const body = await request.json()
-    const { schema_name, owner, description } = body
-    const projectName =
-      typeof (body as { project_name?: unknown }).project_name === "string"
-        ? (body as { project_name: string }).project_name.trim()
-        : ""
-    const ownerSuperadminId = readOptionalSuperadminId(
-      (body as { owner_superadmin_id?: unknown }).owner_superadmin_id
-    )
+    const body = (await request.json()) as Record<string, unknown>
+    const owner = readOwnerRole(body.owner)
+    const description = readDescription(body.description)
+    const projectName = readProjectName(body.project_name)
+    const assignedRoleNames = readRoleNames(body.assigned_role_names)
+    const rawSchemaName = readSchemaName(body.schema_name)
 
-    if (typeof schema_name !== "string" || !isSafePgIdentifier(schema_name.trim())) {
+    if (body.project_name !== undefined && projectName === null) {
       return NextResponse.json(
-        { success: false, error: 'Enter a valid schema name.' },
+        { success: false, error: "Enter a valid project name." },
         { status: 400 }
       )
     }
-    if ((body as { owner_superadmin_id?: unknown }).owner_superadmin_id !== undefined && ownerSuperadminId === undefined) {
+    if (body.assigned_role_names !== undefined && assignedRoleNames === null) {
       return NextResponse.json(
-        { success: false, error: 'Enter a valid superadmin owner.' },
+        { success: false, error: "Enter valid PostgreSQL users to assign." },
         { status: 400 }
       )
     }
-    if (
-      (body as { project_name?: unknown }).project_name !== undefined &&
-      (!projectName || projectName.length > 255)
-    ) {
+    if (!projectName && !rawSchemaName) {
       return NextResponse.json(
-        { success: false, error: 'Enter a valid project name.' },
+        { success: false, error: "Enter a valid schema name." },
+        { status: 400 }
+      )
+    }
+    if (!projectName && body.assigned_role_names !== undefined) {
+      return NextResponse.json(
+        { success: false, error: "PostgreSQL user assignment is only supported when creating a project." },
         { status: 400 }
       )
     }
 
-    const normalizedSchemaName = schema_name.trim()
+    const normalizedSchemaName = projectName ? buildProjectSchemaName(projectName) : rawSchemaName
+    if (!normalizedSchemaName || !isSafePgIdentifier(normalizedSchemaName)) {
+      return NextResponse.json(
+        { success: false, error: "Enter a valid schema name." },
+        { status: 400 }
+      )
+    }
 
     const client = await getPool().connect()
     let inTransaction = false
-    
     try {
-      await ensureSchemaAccessTable(client)
       await ensureProjectsTable(client)
+      await ensureProjectRoleAssignmentsTable(client)
 
-      const schemaExists = await client.query<{ exists: boolean }>(
-        `
-          SELECT EXISTS (
-            SELECT 1
-            FROM pg_catalog.pg_namespace
-            WHERE nspname = $1
-          ) AS exists
-        `,
-        [normalizedSchemaName]
-      )
-
-      if (schemaExists.rows[0]?.exists) {
-        client.release()
+      if (await schemaExists(client, normalizedSchemaName)) {
         return NextResponse.json(
           { success: false, error: `Schema "${normalizedSchemaName}" already exists.` },
           { status: 409 }
         )
       }
 
-      let ownerSuperadmin = null
-      if (ownerSuperadminId !== undefined && ownerSuperadminId !== null) {
-        ownerSuperadmin = await getSuperadminById(client, ownerSuperadminId)
-        if (!ownerSuperadmin) {
-          client.release()
-          return NextResponse.json(
-            { success: false, error: 'Selected superadmin was not found.' },
-            { status: 400 }
-          )
-        }
-      }
-
-      await client.query('BEGIN')
-      inTransaction = true
-      
-      // Create schema
-      const createSchemaQuery = `CREATE SCHEMA ${quotePgIdentifier(normalizedSchemaName)}`
-      await client.query(createSchemaQuery)
-      
-      // Set owner if specified and not postgres
-      if (owner && owner !== 'postgres' && owner !== 'pg_database_owner') {
-        try {
-          await client.query(
-            `ALTER SCHEMA ${quotePgIdentifier(normalizedSchemaName)} OWNER TO ${quotePgIdentifier(String(owner))}`
-          )
-        } catch {
-          console.log('Could not change owner, continuing...')
-        }
-      }
-      
-      // Set comment/description if provided
-      if (description) {
-        await client.query(
-          `COMMENT ON SCHEMA ${quotePgIdentifier(normalizedSchemaName)} IS '${String(description).replace(/'/g, "''")}'`
+      const creatorRoleName = auth.session.email
+      const missingRoles = await listMissingPostgresRoleNames(client, assignedRoleNames ?? [])
+      if (missingRoles.length > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `These PostgreSQL roles were not found: ${missingRoles.join(", ")}`,
+          },
+          { status: 400 }
         )
       }
 
-      if (ownerSuperadminId !== undefined) {
-        await assignSchemaOwner(client, normalizedSchemaName, ownerSuperadminId ?? null)
+      await client.query("BEGIN")
+      inTransaction = true
+
+      await client.query(`CREATE SCHEMA ${quotePgIdentifier(normalizedSchemaName)}`)
+
+      if (owner && owner !== "postgres" && owner !== "pg_database_owner") {
+        try {
+          await client.query(
+            `ALTER SCHEMA ${quotePgIdentifier(normalizedSchemaName)} OWNER TO ${quotePgIdentifier(owner)}`
+          )
+        } catch {
+          console.log("Could not change schema owner, continuing...")
+        }
       }
+
+      if (description) {
+        await client.query(
+          `COMMENT ON SCHEMA ${quotePgIdentifier(normalizedSchemaName)} IS '${description.replace(/'/g, "''")}'`
+        )
+      }
+
+      let storedProject = null
+      let nextAssignedRoleNames: string[] = []
       if (projectName) {
-        await upsertProjectRecord(client, {
+        storedProject = await upsertProjectRecord(client, {
           name: projectName,
           schemaName: normalizedSchemaName,
-          description: typeof description === "string" ? description : null,
-          ownerSuperadminId: ownerSuperadminId ?? null,
+          description: description ?? null,
+          ownerSuperadminId: null,
+          creatorRoleName,
         })
+        nextAssignedRoleNames = await replaceProjectRoleAssignments(
+          client,
+          storedProject.id,
+          assignedRoleNames ?? [],
+          creatorRoleName
+        )
+        await syncProjectRoleSchemaAccess(client, normalizedSchemaName, [], nextAssignedRoleNames)
       }
-      
-      await client.query('COMMIT')
+
+      await client.query("COMMIT")
       inTransaction = false
-      client.release()
-      
+
       return NextResponse.json({
         success: true,
         message: `Schema ${normalizedSchemaName} created successfully`,
         schema_name: normalizedSchemaName,
-        owner_superadmin_id: ownerSuperadminId ?? null,
-        owner_superadmin_email: ownerSuperadmin?.email ?? null,
+        project_name: projectName ?? null,
+        creator_role_name: projectName ? creatorRoleName : null,
+        assigned_role_names: nextAssignedRoleNames,
+        project_id: storedProject?.id ?? null,
+        project_ref: storedProject?.project_ref ?? null,
       })
-      
     } catch (error) {
       if (inTransaction) {
-        await client.query('ROLLBACK')
+        await client.query("ROLLBACK")
       }
-      client.release()
       throw error
+    } finally {
+      client.release()
     }
-    
-  } catch (error: unknown) {
-    console.error('Error creating schema:', error)
+  } catch (error) {
+    console.error("Error creating schema:", error)
     return NextResponse.json(
-      { success: false, error: getErrorMessage(error, 'Failed to create schema') },
+      { success: false, error: getErrorMessage(error, "Failed to create schema") },
       { status: 500 }
     )
   }
 }
 
-// PUT - Update schema (rename or change owner)
+// PUT - Update schema or project-backed schema
 export async function PUT(request: NextRequest) {
   const auth = requireAdminRequest(request)
   if (!auth.ok) return auth.response
 
   try {
-    const body = await request.json()
-    const { old_name, new_name, owner, description } = body
+    const body = (await request.json()) as Record<string, unknown>
+    const oldSchemaName = readSchemaName(body.old_name)
+    const explicitNewSchemaName =
+      body.new_name === undefined ? undefined : readSchemaName(body.new_name)
+    const owner = readOwnerRole(body.owner)
+    const description = readDescription(body.description)
     const projectNameProvided = Object.prototype.hasOwnProperty.call(body, "project_name")
-    const projectName =
-      typeof (body as { project_name?: unknown }).project_name === "string"
-        ? (body as { project_name: string }).project_name.trim()
-        : undefined
-    const ownerSuperadminProvided = Object.prototype.hasOwnProperty.call(body, "owner_superadmin_id")
-    const ownerSuperadminId = readOptionalSuperadminId(
-      (body as { owner_superadmin_id?: unknown }).owner_superadmin_id
-    )
+    const projectName = readProjectName(body.project_name)
+    const assignedRoleNamesProvided = Object.prototype.hasOwnProperty.call(body, "assigned_role_names")
+    const assignedRoleNames = readRoleNames(body.assigned_role_names)
 
-    if (typeof old_name !== "string" || !isSafePgIdentifier(old_name.trim())) {
+    if (!oldSchemaName) {
       return NextResponse.json(
-        { success: false, error: 'Current schema name is required.' },
+        { success: false, error: "Current schema name is required." },
         { status: 400 }
       )
     }
-    if (new_name && (typeof new_name !== "string" || !isSafePgIdentifier(new_name.trim()))) {
+    if (body.new_name !== undefined && !explicitNewSchemaName) {
       return NextResponse.json(
-        { success: false, error: 'Enter a valid new schema name.' },
+        { success: false, error: "Enter a valid new schema name." },
         { status: 400 }
       )
     }
-    if (ownerSuperadminProvided && ownerSuperadminId === undefined) {
+    if (projectNameProvided && projectName === null) {
       return NextResponse.json(
-        { success: false, error: 'Enter a valid superadmin owner.' },
+        { success: false, error: "Enter a valid project name." },
         { status: 400 }
       )
     }
-    if (projectNameProvided && (!projectName || projectName.length > 255)) {
+    if (assignedRoleNamesProvided && assignedRoleNames === null) {
       return NextResponse.json(
-        { success: false, error: 'Enter a valid project name.' },
+        { success: false, error: "Enter valid PostgreSQL users to assign." },
         { status: 400 }
       )
     }
 
-    const oldSchemaName = old_name.trim()
-    const nextSchemaName = typeof new_name === "string" && new_name.trim() ? new_name.trim() : oldSchemaName
+    const nextSchemaName = projectNameProvided
+      ? buildProjectSchemaName(projectName ?? "")
+      : explicitNewSchemaName ?? oldSchemaName
+
+    if (!nextSchemaName || !isSafePgIdentifier(nextSchemaName)) {
+      return NextResponse.json(
+        { success: false, error: "Enter a valid schema name." },
+        { status: 400 }
+      )
+    }
 
     const client = await getPool().connect()
     let inTransaction = false
-    
     try {
-      if (!(await canAccessSchema(client, auth.session.id, oldSchemaName))) {
-        client.release()
+      await ensureProjectsTable(client)
+      await ensureProjectRoleAssignmentsTable(client)
+
+      const existingProject = await getProjectRecordBySchemaName(client, oldSchemaName)
+      if (!(await canAdminAccessSchema(client, auth.session.email, oldSchemaName))) {
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
           { status: 403 }
         )
       }
 
-      await ensureSchemaAccessTable(client)
-      await ensureProjectsTable(client)
-      
-      if (nextSchemaName !== oldSchemaName) {
-        const schemaExists = await client.query<{ exists: boolean }>(
-          `
-            SELECT EXISTS (
-              SELECT 1
-              FROM pg_catalog.pg_namespace
-              WHERE nspname = $1
-            ) AS exists
-          `,
-          [nextSchemaName]
+      if (nextSchemaName !== oldSchemaName && (await schemaExists(client, nextSchemaName))) {
+        return NextResponse.json(
+          { success: false, error: `Schema "${nextSchemaName}" already exists.` },
+          { status: 409 }
         )
-
-        if (schemaExists.rows[0]?.exists) {
-          client.release()
-          return NextResponse.json(
-            { success: false, error: `Schema "${nextSchemaName}" already exists.` },
-            { status: 409 }
-          )
-        }
       }
 
-      if (ownerSuperadminProvided && ownerSuperadminId !== null) {
-        const ownerSuperadmin = await getSuperadminById(client, ownerSuperadminId!)
-        if (!ownerSuperadmin) {
-          client.release()
-          return NextResponse.json(
-            { success: false, error: 'Selected superadmin was not found.' },
-            { status: 400 }
-          )
-        }
+      const creatorRoleName = existingProject?.creator_role_name ?? auth.session.email
+      const previousAssignedRoleNames = existingProject
+        ? await listProjectRoleAssignments(client, existingProject.id)
+        : []
+      const nextRequestedRoleNames =
+        assignedRoleNamesProvided ? assignedRoleNames ?? [] : previousAssignedRoleNames
+      const missingRoles = await listMissingPostgresRoleNames(client, nextRequestedRoleNames)
+      if (missingRoles.length > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `These PostgreSQL roles were not found: ${missingRoles.join(", ")}`,
+          },
+          { status: 400 }
+        )
       }
 
-      await client.query('BEGIN')
+      await client.query("BEGIN")
       inTransaction = true
-      
-      // Rename schema if new name provided
+
       if (nextSchemaName !== oldSchemaName) {
         await client.query(
           `ALTER SCHEMA ${quotePgIdentifier(oldSchemaName)} RENAME TO ${quotePgIdentifier(nextSchemaName)}`
         )
-        await renameSchemaOwnerRecord(client, oldSchemaName, nextSchemaName)
       }
-      
-      // Change owner if specified
-      if (owner && owner !== 'pg_database_owner') {
+
+      if (owner && owner !== "pg_database_owner") {
         try {
           await client.query(
-            `ALTER SCHEMA ${quotePgIdentifier(nextSchemaName)} OWNER TO ${quotePgIdentifier(String(owner))}`
+            `ALTER SCHEMA ${quotePgIdentifier(nextSchemaName)} OWNER TO ${quotePgIdentifier(owner)}`
           )
         } catch {
-          console.log('Could not change owner, continuing...')
+          console.log("Could not change schema owner, continuing...")
         }
       }
-      
-      // Update comment/description if provided
+
       if (description !== undefined) {
         if (description) {
           await client.query(
-            `COMMENT ON SCHEMA ${quotePgIdentifier(nextSchemaName)} IS '${String(description).replace(/'/g, "''")}'`
+            `COMMENT ON SCHEMA ${quotePgIdentifier(nextSchemaName)} IS '${description.replace(/'/g, "''")}'`
           )
         } else {
           await client.query(`COMMENT ON SCHEMA ${quotePgIdentifier(nextSchemaName)} IS NULL`)
         }
       }
 
-      if (ownerSuperadminProvided) {
-        await assignSchemaOwner(client, nextSchemaName, ownerSuperadminId ?? null)
+      let nextAssignedRoleNames = previousAssignedRoleNames
+      let storedProject = existingProject
+
+      if (existingProject) {
+        await renameProjectRecord(client, oldSchemaName, {
+          schemaName: nextSchemaName,
+          name: projectNameProvided ? projectName ?? existingProject.name : undefined,
+          description: description !== undefined ? description : undefined,
+          ownerSuperadminId: undefined,
+          creatorRoleName,
+        })
+        storedProject = await getProjectRecordBySchemaName(client, nextSchemaName)
+      } else if (projectNameProvided && projectName) {
+        storedProject = await upsertProjectRecord(client, {
+          name: projectName,
+          schemaName: nextSchemaName,
+          description: description ?? null,
+          ownerSuperadminId: null,
+          creatorRoleName,
+        })
       }
-      await renameProjectRecord(client, oldSchemaName, {
-        schemaName: nextSchemaName,
-        name: projectNameProvided ? projectName : undefined,
-        description: description !== undefined ? (description ? String(description) : null) : undefined,
-        ownerSuperadminId: ownerSuperadminProvided ? ownerSuperadminId ?? null : undefined,
-      })
-      
-      await client.query('COMMIT')
+
+      if (storedProject) {
+        nextAssignedRoleNames = await replaceProjectRoleAssignments(
+          client,
+          storedProject.id,
+          nextRequestedRoleNames,
+          creatorRoleName
+        )
+        await syncProjectRoleSchemaAccess(
+          client,
+          nextSchemaName,
+          previousAssignedRoleNames,
+          nextAssignedRoleNames
+        )
+      }
+
+      await client.query("COMMIT")
       inTransaction = false
-      client.release()
-      
+
       return NextResponse.json({
         success: true,
-        message: `Schema ${nextSchemaName} updated successfully`
+        message: `Schema ${nextSchemaName} updated successfully`,
+        schema_name: nextSchemaName,
+        project_id: storedProject?.id ?? null,
+        project_ref: storedProject?.project_ref ?? null,
+        creator_role_name: storedProject?.creator_role_name ?? null,
+        assigned_role_names: nextAssignedRoleNames,
       })
-      
     } catch (error) {
       if (inTransaction) {
-        await client.query('ROLLBACK')
+        await client.query("ROLLBACK")
       }
-      client.release()
       throw error
+    } finally {
+      client.release()
     }
-    
-  } catch (error: unknown) {
-    console.error('Error updating schema:', error)
+  } catch (error) {
+    console.error("Error updating schema:", error)
     return NextResponse.json(
-      { success: false, error: getErrorMessage(error, 'Failed to update schema') },
+      { success: false, error: getErrorMessage(error, "Failed to update schema") },
       { status: 500 }
     )
   }
@@ -415,58 +510,69 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const schema_name = searchParams.get('schema_name')
-    const cascade = searchParams.get('cascade') === 'true'
+    const schemaName = searchParams.get("schema_name")
+    const cascade = searchParams.get("cascade") === "true"
 
-    if (!schema_name || !isSafePgIdentifier(schema_name)) {
+    if (!schemaName || !isSafePgIdentifier(schemaName)) {
       return NextResponse.json(
-        { success: false, error: 'Schema name is required' },
+        { success: false, error: "Schema name is required" },
         { status: 400 }
       )
     }
 
     const client = await getPool().connect()
     let inTransaction = false
-    
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schema_name))) {
-        client.release()
+      await ensureProjectsTable(client)
+      await ensureProjectRoleAssignmentsTable(client)
+
+      const project = await getProjectRecordBySchemaName(client, schemaName)
+      if (!(await canAdminAccessSchema(client, auth.session.email, schemaName))) {
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
           { status: 403 }
         )
       }
 
+      const previousAssignedRoleNames = project
+        ? await listProjectRoleAssignments(client, project.id)
+        : []
+
       await client.query("BEGIN")
       inTransaction = true
-      const deleteQuery = cascade 
-        ? `DROP SCHEMA IF EXISTS ${quotePgIdentifier(schema_name)} CASCADE`
-        : `DROP SCHEMA IF EXISTS ${quotePgIdentifier(schema_name)} RESTRICT`
-      
+
+      if (project && previousAssignedRoleNames.length > 0) {
+        await syncProjectRoleSchemaAccess(client, schemaName, previousAssignedRoleNames, [])
+      }
+
+      const deleteQuery = cascade
+        ? `DROP SCHEMA IF EXISTS ${quotePgIdentifier(schemaName)} CASCADE`
+        : `DROP SCHEMA IF EXISTS ${quotePgIdentifier(schemaName)} RESTRICT`
       await client.query(deleteQuery)
-      await removeSchemaOwnerRecord(client, schema_name)
-      await removeProjectRecord(client, schema_name)
+
+      if (project) {
+        await removeProjectRecord(client, schemaName)
+      }
+
       await client.query("COMMIT")
       inTransaction = false
-      client.release()
-      
+
       return NextResponse.json({
         success: true,
-        message: `Schema ${schema_name} deleted successfully`
+        message: `Schema ${schemaName} deleted successfully`,
       })
-      
     } catch (error) {
       if (inTransaction) {
         await client.query("ROLLBACK")
       }
-      client.release()
       throw error
+    } finally {
+      client.release()
     }
-    
-  } catch (error: unknown) {
-    console.error('Error deleting schema:', error)
+  } catch (error) {
+    console.error("Error deleting schema:", error)
     return NextResponse.json(
-      { success: false, error: getErrorMessage(error, 'Failed to delete schema') },
+      { success: false, error: getErrorMessage(error, "Failed to delete schema") },
       { status: 500 }
     )
   }

@@ -1,19 +1,16 @@
 import { NextRequest, NextResponse } from "next/server"
-import { hashPassword, verifyPassword } from "@/lib/auth/passwords"
 import {
   adminSessionPublicUser,
   createAdminSession,
   requireAdminRequest,
   setAdminSessionCookie,
 } from "@/lib/auth/session"
-import { getQuotedControlTableRef } from "@/lib/control-schema"
+import { quotePgIdentifier } from "@/lib/control-schema"
 import { getPool } from "@/lib/db"
+import { authenticatePostgresRole, getPostgresRoleByOid, readRoleName } from "@/lib/postgres-roles"
 
 function readEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null
-  const email = value.trim()
-  if (!email || email.length > 255) return null
-  return email
+  return readRoleName(value)
 }
 
 function readPassword(value: unknown): string | null {
@@ -63,23 +60,13 @@ export async function PATCH(request: NextRequest) {
 
   const client = await getPool().connect()
   try {
-    const currentUserResult = await client.query<{ id: number; email: string; password: string }>(
-      `
-        SELECT id, email, password
-        FROM ${getQuotedControlTableRef()}
-        WHERE id = $1
-        LIMIT 1
-      `,
-      [auth.session.id]
-    )
-
-    const currentUser = currentUserResult.rows[0]
+    const currentUser = await getPostgresRoleByOid(client, auth.session.id)
     if (!currentUser) {
       return NextResponse.json({ success: false, error: "Current user was not found." }, { status: 404 })
     }
 
     if (newPassword) {
-      if (!currentPassword || !verifyPassword(currentPassword, currentUser.password)) {
+      if (!currentPassword || !(await authenticatePostgresRole(currentUser.username, currentPassword))) {
         return NextResponse.json(
           { success: false, error: "Current password is incorrect." },
           { status: 400 }
@@ -87,46 +74,30 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
-    const assignments: string[] = []
-    const values: Array<string | number> = []
-    let nextIndex = 1
-
-    if (nextEmail && nextEmail !== currentUser.email) {
-      assignments.push(`email = $${nextIndex}`)
-      values.push(nextEmail)
-      nextIndex += 1
-    }
-
-    if (newPassword) {
-      assignments.push(`password = $${nextIndex}`)
-      values.push(hashPassword(newPassword))
-      nextIndex += 1
-    }
-
-    if (assignments.length === 0) {
+    if (!nextEmail && !newPassword) {
       return NextResponse.json({
         success: true,
         user: adminSessionPublicUser(auth.session),
       })
     }
 
-    values.push(auth.session.id)
-    const result = await client.query<{ id: number; email: string }>(
-      `
-        UPDATE ${getQuotedControlTableRef()}
-        SET ${assignments.join(", ")}
-        WHERE id = $${nextIndex}
-        RETURNING id, email
-      `,
-      values
-    )
+    const nextUsername = nextEmail && nextEmail !== currentUser.username ? nextEmail : currentUser.username
+    if (nextUsername !== currentUser.username) {
+      await client.query(
+        `ALTER ROLE ${quotePgIdentifier(currentUser.username)} RENAME TO ${quotePgIdentifier(nextUsername)}`
+      )
+    }
+    if (newPassword) {
+      await client.query(
+        `ALTER ROLE ${quotePgIdentifier(nextUsername)} WITH PASSWORD '${newPassword.replace(/'/g, "''")}'`
+      )
+    }
 
-    const updatedUser = result.rows[0]
     const response = NextResponse.json({
       success: true,
       user: {
-        id: updatedUser.id,
-        email: updatedUser.email,
+        id: auth.session.id,
+        email: nextUsername,
         controlSchema: auth.session.controlSchema,
       },
     })
@@ -134,8 +105,8 @@ export async function PATCH(request: NextRequest) {
     return setAdminSessionCookie(
       response,
       createAdminSession({
-        id: updatedUser.id,
-        email: updatedUser.email,
+        id: auth.session.id,
+        email: nextUsername,
         controlSchema: auth.session.controlSchema,
       })
     )

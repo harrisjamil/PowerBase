@@ -32,6 +32,10 @@ export type Agent = {
   email: string
   created_at: string | null
   has_password: boolean
+  superadmin_id: number | null
+  superadmin_email: string | null
+  db_role_name: string
+  accessible_schemas: string[]
 }
 
 interface AgentsTableProps {
@@ -89,6 +93,9 @@ export function AgentsTable({
               <TableRow>
                 <TableHead>ID</TableHead>
                 <TableHead>Email</TableHead>
+                <TableHead>Linked Superadmin</TableHead>
+                <TableHead>DB Role</TableHead>
+                <TableHead>Schema Access</TableHead>
                 <TableHead>Password</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -97,7 +104,7 @@ export function AgentsTable({
             <TableBody>
               {filteredAgents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                     No agents found. Click &quot;Add Agent&quot; to create one.
                   </TableCell>
                 </TableRow>
@@ -106,6 +113,34 @@ export function AgentsTable({
                   <TableRow key={agent.id}>
                     <TableCell className="font-medium">{agent.id}</TableCell>
                     <TableCell>{agent.email}</TableCell>
+                    <TableCell>
+                      {agent.superadmin_email ? (
+                        <span className="text-sm">{agent.superadmin_email}</span>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">Unassigned</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <code className="rounded bg-muted px-2 py-1 text-xs">{agent.db_role_name}</code>
+                    </TableCell>
+                    <TableCell>
+                      {agent.accessible_schemas.length === 0 ? (
+                        <span className="text-sm text-muted-foreground">No schema access</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {agent.accessible_schemas.slice(0, 2).map((schemaName) => (
+                            <Badge key={schemaName} variant="outline">
+                              {schemaName}
+                            </Badge>
+                          ))}
+                          {agent.accessible_schemas.length > 2 ? (
+                            <Badge variant="secondary">
+                              +{agent.accessible_schemas.length - 2}
+                            </Badge>
+                          ) : null}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={agent.has_password ? "default" : "secondary"}>
                         {agent.has_password ? "Set" : "Missing"}

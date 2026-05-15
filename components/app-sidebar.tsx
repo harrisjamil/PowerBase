@@ -35,7 +35,7 @@ const data = {
         <CircleUserRoundIcon
         />
       ),
-      items: [{ title: "Admin", url: "/admin/admin" }, { title: "Agents", url: "/admin/agents" }],
+      items: [{ title: "DB Users", url: "/admin/admin" }],
 
     },
     {
@@ -51,7 +51,6 @@ const data = {
         { title: "Projects", url: "/admin/vm/projects" },
         { title: "Schemas", url: "/admin/schemas" },
         { title: "Visualizer", url: "/admin/schemas/visualizer" },
-        { title: "Consumers", url: "/admin/consumers" },
       ],
 
     },

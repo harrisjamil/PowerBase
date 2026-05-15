@@ -450,31 +450,77 @@ export default function VMPage() {
     await fetchTableSchema(tableName)
   }
 
+  const applyDashboardPayload = (json: {
+    success?: boolean
+    vmDisplayName?: string
+    db?: VMData["db"]
+    vmInfo?: VMInfoRecord
+    tables?: TableInfo[]
+    users?: DatabaseUser[]
+    stats?: TableStat[]
+  }) => {
+    if (!json.success) return
+
+    if (json.db) {
+      setData({
+        success: true,
+        vmDisplayName: json.vmDisplayName,
+        db: json.db,
+      })
+      setHostInput(String(json.db.host ?? ""))
+      setPortInput(String(json.db.port ?? ""))
+    }
+
+    if (typeof json.vmDisplayName === "string") {
+      setDisplayNameInput(json.vmDisplayName)
+    }
+
+    if (json.vmInfo) {
+      setVmInfo(json.vmInfo)
+    }
+
+    if (json.tables) {
+      setTables(json.tables)
+    }
+
+    if (json.users) {
+      setUsers(json.users)
+    }
+
+    if (json.stats) {
+      setStats(json.stats)
+    }
+  }
+
+  const fetchDashboard = async () => {
+    const res = await fetch("/api/vm?action=dashboard")
+    const json = await res.json()
+    applyDashboardPayload(json)
+  }
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
-      await Promise.all([
-        fetchVM(),
-        fetchVMInfo(),
-        fetchTables(),
-        fetchUsers(),
-        fetchStats(),
-      ])
-      setLoading(false)
+      try {
+        await fetchDashboard()
+      } catch (err) {
+        console.error("Failed to load VM dashboard:", err)
+      } finally {
+        setLoading(false)
+      }
     }
-    loadData()
+    void loadData()
   }, [])
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    await Promise.all([
-      fetchVM(),
-      fetchVMInfo(),
-      fetchTables(),
-      fetchUsers(),
-      fetchStats(),
-    ])
-    setRefreshing(false)
+    try {
+      await fetchDashboard()
+    } catch (err) {
+      console.error("Failed to refresh VM dashboard:", err)
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   if (loading) {

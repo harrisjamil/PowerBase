@@ -12,10 +12,23 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 export type AgentFormData = {
   email: string
   password: string
+  superadminId: string
+}
+
+type SuperadminOption = {
+  id: number
+  email: string
 }
 
 interface AgentFormDialogProps {
@@ -25,6 +38,7 @@ interface AgentFormDialogProps {
   initialData?: Omit<AgentFormData, "password"> | null
   isEditing?: boolean
   submitting?: boolean
+  superadmins?: SuperadminOption[]
 }
 
 export function AgentFormDialog({
@@ -34,10 +48,12 @@ export function AgentFormDialog({
   initialData,
   isEditing = false,
   submitting = false,
+  superadmins = [],
 }: AgentFormDialogProps) {
   const [form, setForm] = useState<AgentFormData>(() => ({
     email: initialData?.email ?? "",
     password: "",
+    superadminId: initialData?.superadminId ?? "__none",
   }))
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -81,6 +97,28 @@ export function AgentFormDialog({
                 required={!isEditing}
                 disabled={submitting}
               />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="superadmin">Linked Superadmin</Label>
+              <Select
+                value={form.superadminId}
+                onValueChange={(value) =>
+                  setForm((current) => ({ ...current, superadminId: value }))
+                }
+                disabled={submitting}
+              >
+                <SelectTrigger id="superadmin">
+                  <SelectValue placeholder="Select a superadmin" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">No linked superadmin</SelectItem>
+                  {superadmins.map((superadmin) => (
+                    <SelectItem key={superadmin.id} value={String(superadmin.id)}>
+                      {superadmin.email}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <DialogFooter>

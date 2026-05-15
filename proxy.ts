@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 import { getAdminSessionFromRequest } from "@/lib/auth/session"
-import { getAgentSessionFromRequest } from "@/lib/auth/agent-session"
+import { getDbUserSessionFromRequest } from "@/lib/auth/db-user-session"
 
 function isAdminLoginPath(pathname: string) {
   return pathname === "/admin/login" || pathname === "/login"
@@ -27,6 +27,26 @@ function isPublicAgentApiPath(pathname: string) {
   )
 }
 
+function isPublicDbUserApiPath(pathname: string) {
+  return (
+    pathname === "/api/db-users/login" ||
+    pathname === "/api/db-users/logout" ||
+    pathname === "/api/db-users/session"
+  )
+}
+
+function isAgentReadableApiPath(pathname: string, method: string) {
+  if (method !== "GET") {
+    return false
+  }
+
+  return (
+    pathname === "/api/schemas" ||
+    pathname.startsWith("/api/schemas/") ||
+    pathname === "/api/projects"
+  )
+}
+
 function unauthorizedApiResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 })
 }
@@ -34,7 +54,7 @@ function unauthorizedApiResponse() {
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
   const adminSession = getAdminSessionFromRequest(request)
-  const agentSession = getAgentSessionFromRequest(request)
+  const dbUserSession = getDbUserSessionFromRequest(request)
 
   if (isAdminLoginPath(pathname)) {
     if (adminSession) {
@@ -44,8 +64,8 @@ export function proxy(request: NextRequest) {
   }
 
   if (isClientLoginPath(pathname)) {
-    if (agentSession) {
-      return NextResponse.redirect(new URL("/client", request.url))
+    if (dbUserSession) {
+      return NextResponse.redirect(new URL("/client/dashboard", request.url))
     }
     return NextResponse.next()
   }
@@ -60,7 +80,7 @@ export function proxy(request: NextRequest) {
   }
 
   if (pathname.startsWith("/client")) {
-    if (!isPublicClientPath(pathname) && !agentSession) {
+    if (!isPublicClientPath(pathname) && !dbUserSession) {
       const loginUrl = new URL("/client/login", request.url)
       loginUrl.searchParams.set("next", `${pathname}${search}`)
       return NextResponse.redirect(loginUrl)
@@ -76,6 +96,23 @@ export function proxy(request: NextRequest) {
       return unauthorizedApiResponse()
     }
     return NextResponse.next()
+  }
+
+  if (pathname === "/api/db-users" || pathname.startsWith("/api/db-users/")) {
+    if (isPublicDbUserApiPath(pathname)) {
+      return NextResponse.next()
+    }
+    if (!adminSession) {
+      return unauthorizedApiResponse()
+    }
+    return NextResponse.next()
+  }
+
+  if (isAgentReadableApiPath(pathname, request.method)) {
+    if (adminSession || dbUserSession) {
+      return NextResponse.next()
+    }
+    return unauthorizedApiResponse()
   }
 
   if (!adminSession) {
@@ -97,6 +134,7 @@ export const config = {
     "/api/superadmins/:path*",
     "/api/db-users/:path*",
     "/api/control-schema/:path*",
+    "/api/projects",
     "/api/schemas/:path*",
     "/api/vm",
     "/api/vm-ssh/:path*",

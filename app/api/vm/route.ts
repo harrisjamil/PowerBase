@@ -29,20 +29,54 @@ async function getVMInfo(poolInstance: Pool, parsed: ParsedDbUrl) {
   };
 
   try {
-    const sessionResult = await poolInstance.query(`
-      SELECT current_user::text AS cu, session_user::text AS su
-    `);
+    const [
+      sessionResult,
+      versionResult,
+      uptimeResult,
+      diskResult,
+      connResult,
+      hostResult,
+      dbListResult,
+    ] = await Promise.all([
+      poolInstance.query(`
+        SELECT current_user::text AS cu, session_user::text AS su
+      `),
+      poolInstance.query(`
+        SELECT 
+          version() as pg_version,
+          current_setting('server_version') as server_version,
+          current_setting('data_directory') as data_directory,
+          current_setting('max_connections') as max_connections,
+          current_setting('shared_buffers') as shared_buffers
+      `),
+      poolInstance.query(`
+        SELECT 
+          pg_postmaster_start_time() as started,
+          now() - pg_postmaster_start_time() as uptime
+      `),
+      poolInstance.query(`
+        SELECT 
+          pg_database_size(current_database()) as current_db_size,
+          sum(pg_database_size(datname)) as total_size,
+          count(*)::int as database_count
+        FROM pg_database
+      `),
+      poolInstance.query(`
+        SELECT count(*)::int as active_connections 
+        FROM pg_stat_activity 
+        WHERE state = 'active'
+      `),
+      poolInstance.query(`
+        SELECT inet_server_addr()::text as server_ip, inet_server_port()::text as server_port
+      `),
+      poolInstance.query(`
+        SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname
+      `),
+    ]);
+
     info.currentUser = sessionResult.rows[0].cu;
     info.sessionUser = sessionResult.rows[0].su;
 
-    const versionResult = await poolInstance.query(`
-      SELECT 
-        version() as pg_version,
-        current_setting('server_version') as server_version,
-        current_setting('data_directory') as data_directory,
-        current_setting('max_connections') as max_connections,
-        current_setting('shared_buffers') as shared_buffers
-    `);
     const row0 = versionResult.rows[0];
     const fullVer = String(row0.pg_version ?? "");
     info.postgresVersion = fullVer;
@@ -52,23 +86,11 @@ async function getVMInfo(poolInstance: Pool, parsed: ParsedDbUrl) {
     info.maxConnections = String(row0.max_connections ?? "");
     info.sharedBuffers = String(row0.shared_buffers ?? "");
 
-    const uptimeResult = await poolInstance.query(`
-      SELECT 
-        pg_postmaster_start_time() as started,
-        now() - pg_postmaster_start_time() as uptime
-    `);
     const started = uptimeResult.rows[0].started;
     info.serverStartTime =
       started instanceof Date ? started.toISOString() : String(started ?? "");
     info.serverUptime = String(uptimeResult.rows[0].uptime ?? "");
 
-    const diskResult = await poolInstance.query(`
-      SELECT 
-        pg_database_size(current_database()) as current_db_size,
-        sum(pg_database_size(datname)) as total_size,
-        count(*)::int as database_count
-      FROM pg_database
-    `);
     const totalBytes = diskResult.rows[0].total_size;
     info.totalDatabaseSize = totalBytes
       ? `${(Number(totalBytes) / 1024 / 1024 / 1024).toFixed(2)} GB`
@@ -79,22 +101,11 @@ async function getVMInfo(poolInstance: Pool, parsed: ParsedDbUrl) {
       : "Unknown";
     info.databaseCount = diskResult.rows[0].database_count;
 
-    const connResult = await poolInstance.query(`
-      SELECT count(*)::int as active_connections 
-      FROM pg_stat_activity 
-      WHERE state = 'active'
-    `);
     info.activeConnections = connResult.rows[0].active_connections;
 
-    const hostResult = await poolInstance.query(`
-      SELECT inet_server_addr()::text as server_ip, inet_server_port()::text as server_port
-    `);
     info.serverIP = hostResult.rows[0].server_ip || "Unknown";
     info.serverPort = hostResult.rows[0].server_port || "Unknown";
 
-    const dbListResult = await poolInstance.query(`
-      SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname
-    `);
     info.databases = dbListResult.rows.map((r) => r.datname);
 
     info.hostnameLabel = `${parsed.host}:${parsed.port}`;
@@ -133,6 +144,85 @@ export async function GET(request: Request) {
       return NextResponse.json({
         success: true,
         vmInfo,
+      });
+    }
+
+    if (action === "dashboard") {
+      const parsed = getEffectiveParsed();
+      const envParsed = getEnvParsed();
+      const local = readVmLocalSettings();
+      const poolInstance = getPool();
+
+      const [
+        vmInfo,
+        versionResult,
+        sizeResult,
+        connResult,
+        tablesResult,
+        usersResult,
+        statsResult,
+      ] = await Promise.all([
+        getVMInfo(poolInstance, parsed),
+        poolInstance.query("SELECT version()"),
+        poolInstance.query(`SELECT pg_database_size($1) as size`, [parsed.database]),
+        poolInstance.query(
+          `SELECT count(*)::int as count FROM pg_stat_activity WHERE datname = $1`,
+          [parsed.database]
+        ),
+        poolInstance.query(`
+          SELECT table_name, table_schema
+          FROM information_schema.tables 
+          WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+          AND table_type = 'BASE TABLE'
+          ORDER BY table_name
+        `),
+        poolInstance.query(`
+          SELECT 
+            usename as username,
+            usesuper as is_superuser,
+            usecreatedb as can_create_db,
+            valuntil as valid_until
+          FROM pg_user
+          ORDER BY usename
+        `),
+        poolInstance.query(`
+          SELECT 
+            schemaname,
+            relname AS tablename,
+            n_live_tup as live_rows,
+            n_dead_tup as dead_rows,
+            last_vacuum,
+            last_autovacuum,
+            last_analyze,
+            last_autoanalyze
+          FROM pg_stat_user_tables
+          ORDER BY n_live_tup DESC
+          LIMIT 20
+        `),
+      ]);
+
+      vmInfo.vmDisplayName = local.displayName ?? "";
+      const bytes = sizeResult.rows[0]?.size;
+      const dbSize = bytes ? `${(Number(bytes) / 1024 / 1024).toFixed(2)} MB` : "Unknown";
+
+      return NextResponse.json({
+        success: true,
+        vmDisplayName: local.displayName ?? "",
+        vmInfo,
+        db: {
+          host: parsed.host,
+          port: parsed.port,
+          database: parsed.database,
+          user: parsed.user,
+          envHost: envParsed.host,
+          envPort: envParsed.port,
+          pgVersion: versionResult.rows[0]?.version ?? "Unknown",
+          dbSize,
+          activeConnections: Number(connResult.rows[0]?.count ?? 0),
+        },
+        tables: tablesResult.rows,
+        users: usersResult.rows,
+        stats: statsResult.rows,
       });
     }
 
@@ -217,7 +307,7 @@ export async function GET(request: Request) {
       const result = await poolInstance.query(`
         SELECT 
           schemaname,
-          tablename,
+          relname AS tablename,
           n_live_tup as live_rows,
           n_dead_tup as dead_rows,
           last_vacuum,

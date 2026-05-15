@@ -11,7 +11,7 @@ export function AgentLogoutButton() {
   const handleLogout = async () => {
     setLoggingOut(true)
     try {
-      await fetch("/api/agents/logout", { method: "POST" })
+      await fetch("/api/db-users/logout", { method: "POST" })
     } finally {
       router.replace("/client/login")
       router.refresh()

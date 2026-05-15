@@ -2,14 +2,37 @@ import type { PoolClient } from "pg"
 import { NextRequest, NextResponse } from "next/server"
 import { hashPassword } from "@/lib/auth/passwords"
 import { requireAdminRequest } from "@/lib/auth/session"
-import { AgentRecord, ensureAgentsTable, readAgentEmail } from "@/lib/agents"
+import { AgentRecord, readAgentEmail } from "@/lib/agents"
 import { getPool } from "@/lib/db"
-import { getQuotedAgentsTableRef } from "@/lib/control-schema"
+import {
+  dropIdentityDbRole,
+  ensureIdentityAccessModel,
+  getAgentDbRoleName,
+  listSuperadminIdentities,
+  syncAgentDbRole,
+} from "@/lib/identity-db-access"
+import { getAccessibleSchemaNames } from "@/lib/schema-access"
+import {
+  getControlSchema,
+  getQuotedAgentsTableRef,
+  getQuotedControlTableRef,
+} from "@/lib/control-schema"
 
 type AgentBody = {
   id?: unknown
   email?: unknown
   password?: unknown
+  superadmin_id?: unknown
+}
+
+type AgentListRow = AgentRecord & {
+  superadmin_id: number | null
+  superadmin_email: string | null
+}
+
+type SuperadminOption = {
+  id: number
+  email: string
 }
 
 function readId(value: unknown): number | null {
@@ -22,6 +45,12 @@ function readPassword(value: unknown): string | null {
   if (typeof value !== "string") return null
   if (!value || value.length > 512) return null
   return value
+}
+
+function readOptionalSuperadminId(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null || value === "") return null
+  return readId(value)
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -52,16 +81,42 @@ export async function GET(request: NextRequest) {
 
   const client = await getPool().connect()
   try {
-    await ensureAgentsTable(client)
-    const result = await client.query<AgentRecord>(`
-      SELECT id, email, created_at::text, password IS NOT NULL AS has_password
-      FROM ${getQuotedAgentsTableRef()}
-      ORDER BY id
+    await ensureIdentityAccessModel(client)
+    const result = await client.query<AgentListRow>(`
+      SELECT
+        agents.id,
+        agents.email,
+        agents.created_at::text,
+        NULLIF(agents.password, '') IS NOT NULL AS has_password,
+        agents.superadmin_id,
+        superadmins.email AS superadmin_email
+      FROM ${getQuotedAgentsTableRef()} agents
+      LEFT JOIN ${getQuotedControlTableRef()} superadmins
+        ON superadmins.id = agents.superadmin_id
+      ORDER BY agents.id
     `)
+    const superadmins: SuperadminOption[] = await listSuperadminIdentities(client)
+
+    const agents = []
+    for (const agent of result.rows) {
+      const accessibleSchemas =
+        agent.superadmin_id === null
+          ? []
+          : Array.from(await getAccessibleSchemaNames(client, agent.superadmin_id)).filter(
+              (schemaName) => schemaName !== getControlSchema()
+            )
+
+      agents.push({
+        ...agent,
+        db_role_name: getAgentDbRoleName(agent.id),
+        accessible_schemas: accessibleSchemas,
+      })
+    }
 
     return NextResponse.json({
       success: true,
-      agents: result.rows,
+      agents,
+      superadmins,
       count: result.rows.length,
     })
   } catch (error) {
@@ -91,6 +146,7 @@ export async function POST(request: NextRequest) {
 
   const email = readAgentEmail(body.email)
   const password = readPassword(body.password)
+  const superadminId = readOptionalSuperadminId(body.superadmin_id)
 
   if (!email || !password) {
     return NextResponse.json(
@@ -98,24 +154,46 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     )
   }
+  if (body.superadmin_id !== undefined && superadminId === undefined) {
+    return NextResponse.json(
+      { success: false, error: "Superadmin assignment is invalid" },
+      { status: 400 }
+    )
+  }
 
   const client = await getPool().connect()
   try {
-    await ensureAgentsTable(client)
+    await ensureIdentityAccessModel(client)
     if (await emailBelongsToAnotherAgent(client, email)) {
       return NextResponse.json(
         { success: false, error: "An agent with this email already exists" },
         { status: 409 }
       )
     }
-    const result = await client.query<AgentRecord>(
+    if (superadminId !== undefined && superadminId !== null) {
+      const superadmin = (await listSuperadminIdentities(client)).find((item) => item.id === superadminId)
+      if (!superadmin) {
+        return NextResponse.json(
+          { success: false, error: "Selected superadmin was not found" },
+          { status: 400 }
+        )
+      }
+    }
+    const result = await client.query<AgentListRow>(
       `
-        INSERT INTO ${getQuotedAgentsTableRef()} (email, password, created_at)
-        VALUES ($1, $2, now())
-        RETURNING id, email, created_at::text, password IS NOT NULL AS has_password
+        INSERT INTO ${getQuotedAgentsTableRef()} (email, password, created_at, superadmin_id)
+        VALUES ($1, $2, now(), $3)
+        RETURNING
+          id,
+          email,
+          created_at::text,
+          NULLIF(password, '') IS NOT NULL AS has_password,
+          superadmin_id,
+          null::text AS superadmin_email
       `,
-      [email, hashPassword(password)]
+      [email, hashPassword(password), superadminId ?? null]
     )
+    await syncAgentDbRole(client, result.rows[0].id, result.rows[0].superadmin_id)
 
     return NextResponse.json({
       success: true,
@@ -151,6 +229,7 @@ export async function PUT(request: NextRequest) {
   const email = readAgentEmail(body.email)
   const password =
     body.password === undefined || body.password === "" ? null : readPassword(body.password)
+  const superadminId = readOptionalSuperadminId(body.superadmin_id)
 
   if (!id || !email) {
     return NextResponse.json(
@@ -164,31 +243,57 @@ export async function PUT(request: NextRequest) {
       { status: 400 }
     )
   }
+  if (body.superadmin_id !== undefined && superadminId === undefined) {
+    return NextResponse.json(
+      { success: false, error: "Superadmin assignment is invalid" },
+      { status: 400 }
+    )
+  }
 
   const assignments = ["email = $2"]
   const values: Array<number | string | null> = [id, email]
-  const nextIndex = 3
+  let nextIndex = 3
 
   if (password !== null) {
     assignments.push(`password = $${nextIndex}`)
     values.push(hashPassword(password))
+    nextIndex += 1
+  }
+  if (superadminId !== undefined) {
+    assignments.push(`superadmin_id = $${nextIndex}`)
+    values.push(superadminId)
   }
 
   const client = await getPool().connect()
   try {
-    await ensureAgentsTable(client)
+    await ensureIdentityAccessModel(client)
     if (await emailBelongsToAnotherAgent(client, email, id)) {
       return NextResponse.json(
         { success: false, error: "An agent with this email already exists" },
         { status: 409 }
       )
     }
-    const result = await client.query<AgentRecord>(
+    if (superadminId !== undefined && superadminId !== null) {
+      const superadmin = (await listSuperadminIdentities(client)).find((item) => item.id === superadminId)
+      if (!superadmin) {
+        return NextResponse.json(
+          { success: false, error: "Selected superadmin was not found" },
+          { status: 400 }
+        )
+      }
+    }
+    const result = await client.query<AgentListRow>(
       `
         UPDATE ${getQuotedAgentsTableRef()}
         SET ${assignments.join(", ")}
         WHERE id = $1
-        RETURNING id, email, created_at::text, password IS NOT NULL AS has_password
+        RETURNING
+          id,
+          email,
+          created_at::text,
+          NULLIF(password, '') IS NOT NULL AS has_password,
+          superadmin_id,
+          null::text AS superadmin_email
       `,
       values
     )
@@ -199,6 +304,7 @@ export async function PUT(request: NextRequest) {
         { status: 404 }
       )
     }
+    await syncAgentDbRole(client, result.rows[0].id, result.rows[0].superadmin_id)
 
     return NextResponse.json({
       success: true,
@@ -231,7 +337,7 @@ export async function DELETE(request: NextRequest) {
 
   const client = await getPool().connect()
   try {
-    await ensureAgentsTable(client)
+    await ensureIdentityAccessModel(client)
     const result = await client.query<{ id: number; email: string }>(
       `
         DELETE FROM ${getQuotedAgentsTableRef()}
@@ -247,6 +353,7 @@ export async function DELETE(request: NextRequest) {
         { status: 404 }
       )
     }
+    await dropIdentityDbRole(client, getAgentDbRoleName(result.rows[0].id))
 
     return NextResponse.json({
       success: true,

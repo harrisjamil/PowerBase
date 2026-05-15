@@ -23,6 +23,9 @@ export function LoginForm({
   description = "Enter your email below to login to your account",
   submitLabel = "Login",
   loadingLabel = "Logging in...",
+  identifierLabel = "Email",
+  identifierPlaceholder = "Enter your email",
+  identifierKey = "email",
   loginPath = "/api/login",
   successRedirect = "/admin/dashboard",
   ...props
@@ -31,6 +34,9 @@ export function LoginForm({
   description?: string
   submitLabel?: string
   loadingLabel?: string
+  identifierLabel?: string
+  identifierPlaceholder?: string
+  identifierKey?: "email" | "username"
   loginPath?: string
   successRedirect?: string
 }) {
@@ -57,7 +63,7 @@ export function LoginForm({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ [identifierKey]: email, password }),
       })
   
       const data = await response.json()
@@ -88,11 +94,11 @@ export function LoginForm({
           <form onSubmit={handleSubmit}>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="email">Email</FieldLabel>
+                <FieldLabel htmlFor="email">{identifierLabel}</FieldLabel>
                 <Input
                   id="email"
-                  type="email"
-                  placeholder="Enter your email"
+                  type={identifierKey === "email" ? "email" : "text"}
+                  placeholder={identifierPlaceholder}
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}

@@ -1,76 +1,75 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { Database, FolderKanban, UserRound } from "lucide-react"
+import { Database, FolderKanban, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { buildProjectSchemaName } from "@/lib/project-names"
 
 export type ProjectFormData = {
   name: string
   schemaName: string
-  ownerSuperadminId: number
+  assignedRoleNames: string[]
 }
 
-export type ProjectSuperadmin = {
-  id: string
-  email: string
+export type ProjectPgUser = {
+  oid: number
+  username: string
+  canLogin: boolean
+  isSystemRole: boolean
 }
 
 type ProjectSetupFormProps = {
   onCancel?: () => void
   onSubmit: (data: ProjectFormData) => Promise<void>
-  superadmins?: ProjectSuperadmin[]
+  pgUsers?: ProjectPgUser[]
+  creatorRoleName?: string | null
   isSubmitting?: boolean
   submitLabel?: string
-}
-
-function buildSchemaName(name: string) {
-  const normalized = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .replace(/_+/g, "_")
-
-  if (!normalized) {
-    return ""
-  }
-
-  const safeName = /^\d/.test(normalized) ? `project_${normalized}` : normalized
-  return safeName.slice(0, 63).replace(/_+$/g, "")
 }
 
 export function ProjectSetupForm({
   onCancel,
   onSubmit,
-  superadmins = [],
+  pgUsers = [],
+  creatorRoleName,
   isSubmitting = false,
   submitLabel = "Create project",
 }: ProjectSetupFormProps) {
   const [name, setName] = useState("")
-  const [ownerSuperadminId, setOwnerSuperadminId] = useState(superadmins[0]?.id ?? "")
-  const schemaName = useMemo(() => buildSchemaName(name), [name])
-  const resolvedOwnerSuperadminId = ownerSuperadminId || superadmins[0]?.id || ""
-  const selectedSuperadmin =
-    superadmins.find((user) => user.id === resolvedOwnerSuperadminId) ?? null
+  const [selectedRoleNames, setSelectedRoleNames] = useState<string[]>([])
+  const schemaName = useMemo(() => buildProjectSchemaName(name), [name])
+  const assignableUsers = useMemo(
+    () =>
+      pgUsers.filter(
+        (user) => user.canLogin && (!creatorRoleName || user.username !== creatorRoleName)
+      ),
+    [creatorRoleName, pgUsers]
+  )
+
+  const toggleRole = (roleName: string, checked: boolean) => {
+    setSelectedRoleNames((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(roleName)
+      } else {
+        next.delete(roleName)
+      }
+      return Array.from(next).sort((left, right) => left.localeCompare(right))
+    })
+  }
 
   const handleSubmit = async () => {
-    if (!name.trim() || !schemaName || !resolvedOwnerSuperadminId) {
+    if (!name.trim() || !schemaName) {
       return
     }
 
     await onSubmit({
       name: name.trim(),
       schemaName,
-      ownerSuperadminId: Number(resolvedOwnerSuperadminId),
+      assignedRoleNames: selectedRoleNames,
     })
   }
 
@@ -83,7 +82,7 @@ export function ProjectSetupForm({
         <div>
           <h3 className="text-base font-semibold">Project details</h3>
           <p className="text-sm text-muted-foreground">
-            Create a project schema and assign exactly one superadmin owner.
+            Create a project schema, assign PostgreSQL users to it, and keep the creator assigned automatically.
           </p>
         </div>
       </div>
@@ -116,33 +115,61 @@ export function ProjectSetupForm({
             />
           </div>
           <p className="text-xs text-muted-foreground">
-            This schema will be created in Postgres and linked to the selected superadmin.
+            This schema will be created automatically in PostgreSQL from the project name.
           </p>
         </div>
 
         <div className="space-y-2">
-          <Label>Schema owner superadmin</Label>
-          <Select value={resolvedOwnerSuperadminId} onValueChange={setOwnerSuperadminId}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a superadmin" />
-            </SelectTrigger>
-            <SelectContent>
-              {superadmins.map((user) => (
-                <SelectItem key={user.id} value={user.id}>
-                  {user.email}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {selectedSuperadmin ? (
+          <Label>Project creator</Label>
+          {creatorRoleName ? (
             <div className="flex items-center gap-2 rounded-xl border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-              <UserRound className="h-4 w-4" />
-              Only <span className="font-medium text-foreground">{selectedSuperadmin.email}</span> will
-              see this assigned schema.
+              <ShieldCheck className="h-4 w-4" />
+              <span className="font-medium text-foreground">{creatorRoleName}</span>
+              is always assigned to this project and will always keep access.
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">
-              Create at least one superadmin first if the list is empty.
+              The current admin will be assigned automatically when the project is created.
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label>Assign PostgreSQL users</Label>
+            <p className="text-xs text-muted-foreground">
+              Only these PostgreSQL login users, plus the creator, will receive access to the new schema.
+            </p>
+          </div>
+
+          {assignableUsers.length > 0 ? (
+            <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border p-3">
+              {assignableUsers.map((user) => (
+                <label
+                  key={user.oid}
+                  htmlFor={`project-role-${user.oid}`}
+                  className="flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2"
+                >
+                  <Checkbox
+                    id={`project-role-${user.oid}`}
+                    checked={selectedRoleNames.includes(user.username)}
+                    onCheckedChange={(checked) => toggleRole(user.username, checked === true)}
+                    disabled={isSubmitting}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <div className="font-medium">{user.username}</div>
+                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      <span>{user.isSystemRole ? "System role" : "Custom role"}</span>
+                      <span>LOGIN enabled</span>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No login-enabled PostgreSQL users are available to assign yet.
             </p>
           )}
         </div>
@@ -155,7 +182,7 @@ export function ProjectSetupForm({
           ) : null}
           <Button
             onClick={handleSubmit}
-            disabled={isSubmitting || !name.trim() || !schemaName || !resolvedOwnerSuperadminId}
+            disabled={isSubmitting || !name.trim() || !schemaName}
           >
             {isSubmitting ? "Creating..." : submitLabel}
           </Button>

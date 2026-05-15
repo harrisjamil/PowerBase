@@ -1,21 +1,21 @@
 import { NextResponse } from "next/server"
-import { requireAdminRequest } from "@/lib/auth/session"
+import { requirePrincipalRequest } from "@/lib/auth/principal-session"
 import { getPool } from "@/lib/db"
-import { getAccessibleSchemaNames } from "@/lib/schema-access"
+import { getAccessibleSchemaNamesForPrincipal } from "@/lib/principal-access"
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Failed to fetch schema hierarchy"
 }
 
 export async function GET(request: Request) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
     const client = await getPool().connect()
 
     try {
-      const accessibleSchemas = await getAccessibleSchemaNames(client, auth.session.id)
+      const accessibleSchemas = await getAccessibleSchemaNamesForPrincipal(client, auth.session)
 
       const schemasQuery = `
         SELECT
@@ -143,12 +143,10 @@ export async function GET(request: Request) {
         ORDER BY n.nspname, c.relname, a.attnum
       `
 
-      const [schemasResult, tablesResult, relationshipsResult, columnsResult] = await Promise.all([
-        client.query(schemasQuery),
-        client.query(tablesQuery),
-        client.query(relationshipsQuery),
-        client.query(columnsQuery),
-      ])
+      const schemasResult = await client.query(schemasQuery)
+      const tablesResult = await client.query(tablesQuery)
+      const relationshipsResult = await client.query(relationshipsQuery)
+      const columnsResult = await client.query(columnsQuery)
 
       const visibleSchemas = schemasResult.rows.filter((schema) =>
         accessibleSchemas.has(schema.schema_name)

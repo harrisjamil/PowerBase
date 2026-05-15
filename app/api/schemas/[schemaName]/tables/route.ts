@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdminRequest } from "@/lib/auth/session"
+import { requirePrincipalRequest } from "@/lib/auth/principal-session"
 import { getPool } from '@/lib/db'
 import { isSafePgIdentifier, quotePgIdentifier } from "@/lib/control-schema"
-import { canAccessSchema } from "@/lib/schema-access"
+import { canPrincipalAccessSchema } from "@/lib/principal-access"
 
 type CreateTableColumn = {
   column_name: string
@@ -28,7 +28,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -41,7 +41,7 @@ export async function GET(
     const client = await getPool().connect()
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
@@ -120,7 +120,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -161,7 +161,7 @@ export async function POST(
     let inTransaction = false
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
@@ -240,7 +240,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -262,7 +262,7 @@ export async function DELETE(
     const client = await getPool().connect()
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },

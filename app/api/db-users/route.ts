@@ -1,60 +1,42 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireAdminRequest } from "@/lib/auth/session"
 import { getPool } from "@/lib/db"
+import {
+  createPostgresRole,
+  dropPostgresRole,
+  getPostgresRoleByName,
+  getPostgresRoleByOid,
+  listGrantableSchemas,
+  listPostgresRoles,
+  readRoleName,
+  readRolePassword,
+  readSchemaNames,
+  updatePostgresRole,
+} from "@/lib/postgres-roles"
 
 type DbUserBody = {
+  oid?: unknown
   username?: unknown
   password?: unknown
-  new_password?: unknown
+  can_login?: unknown
+  is_admin?: unknown
+  is_superuser?: unknown
   can_create_db?: unknown
   can_create_role?: unknown
-  is_superuser?: unknown
-  is_replication?: unknown
-  bypass_rls?: unknown
+  schema_names?: unknown
 }
 
-function readRoleName(value: unknown): string | null {
-  if (typeof value !== "string") return null
-  const trimmed = value.trim()
-  if (!trimmed || trimmed.length > 63 || trimmed.includes("\0")) return null
-  return trimmed
+function readOid(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value)
+  return null
 }
 
-function readPassword(value: unknown): string | null {
-  if (typeof value !== "string") return null
-  if (!value || value.length > 512 || value.includes("\0")) return null
-  return value
+function readBoolean(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback
 }
 
-function bool(value: unknown): boolean {
-  return value === true
-}
-
-function quoteIdentifier(value: string): string {
-  return `"${value.replace(/"/g, "\"\"")}"`
-}
-
-function quoteLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`
-}
-
-function roleAttributes(input: {
-  can_create_db: boolean
-  can_create_role: boolean
-  is_superuser: boolean
-  is_replication: boolean
-  bypass_rls: boolean
-}) {
-  return [
-    input.can_create_db ? "CREATEDB" : "NOCREATEDB",
-    input.can_create_role ? "CREATEROLE" : "NOCREATEROLE",
-    input.is_superuser ? "SUPERUSER" : "NOSUPERUSER",
-    input.is_replication ? "REPLICATION" : "NOREPLICATION",
-    input.bypass_rls ? "BYPASSRLS" : "NOBYPASSRLS",
-  ].join(" ")
-}
-
-function errorMessage(error: unknown, fallback: string): string {
+function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
@@ -64,38 +46,21 @@ export async function GET(request: NextRequest) {
 
   const client = await getPool().connect()
   try {
-    const [usersResult, metaResult] = await Promise.all([
-      client.query(`
-        SELECT
-          r.rolname AS username,
-          r.rolcreatedb AS can_create_db,
-          r.rolcreaterole AS can_create_role,
-          r.rolsuper AS is_superuser,
-          r.rolreplication AS is_replication,
-          r.rolbypassrls AS bypass_rls,
-          a.rolpassword IS NOT NULL AS has_password,
-          r.rolvaliduntil::text AS password_expiry
-        FROM pg_roles r
-        LEFT JOIN pg_authid a ON r.oid = a.oid
-        WHERE r.rolcanlogin = true
-        ORDER BY r.rolname
-      `),
-      client.query(`
-        SELECT current_database() AS database_name, current_user AS current_user
-      `),
+    const [users, schemas] = await Promise.all([
+      listPostgresRoles(client),
+      listGrantableSchemas(client),
     ])
 
     return NextResponse.json({
       success: true,
-      users: usersResult.rows,
-      count: usersResult.rows.length,
-      database: metaResult.rows[0]?.database_name ?? null,
-      currentUser: metaResult.rows[0]?.current_user ?? null,
+      users,
+      schemas,
+      count: users.length,
     })
   } catch (error) {
-    console.error("Database error:", error)
+    console.error("PostgreSQL roles error:", error)
     return NextResponse.json(
-      { success: false, error: "Failed to fetch database users" },
+      { success: false, error: errorMessage(error, "Failed to fetch PostgreSQL users") },
       { status: 500 }
     )
   } finally {
@@ -118,44 +83,66 @@ export async function POST(request: NextRequest) {
   }
 
   const username = readRoleName(body.username)
-  const password = readPassword(body.password)
+  const password = readRolePassword(body.password)
+  const schemaNames = readSchemaNames(body.schema_names)
+  const canLogin = readBoolean(body.can_login, true)
+  const isAdmin = readBoolean(body.is_admin)
+  const isSuperuser = readBoolean(body.is_superuser)
+  const canCreateDb = readBoolean(body.can_create_db)
+  const canCreateRole = readBoolean(body.can_create_role)
+
   if (!username || !password) {
     return NextResponse.json(
       { success: false, error: "Username and password are required" },
       { status: 400 }
     )
   }
-
-  const role = quoteIdentifier(username)
-  const attributes = roleAttributes({
-    can_create_db: bool(body.can_create_db),
-    can_create_role: bool(body.can_create_role),
-    is_superuser: bool(body.is_superuser),
-    is_replication: bool(body.is_replication),
-    bypass_rls: bool(body.bypass_rls),
-  })
+  if (schemaNames === null) {
+    return NextResponse.json(
+      { success: false, error: "Schema permissions are invalid" },
+      { status: 400 }
+    )
+  }
 
   const client = await getPool().connect()
   let inTransaction = false
   try {
+    const existingRole = await getPostgresRoleByName(client, username)
+    if (existingRole) {
+      return NextResponse.json(
+        { success: false, error: "A PostgreSQL role with this name already exists" },
+        { status: 409 }
+      )
+    }
+
     await client.query("BEGIN")
     inTransaction = true
-    await client.query(`CREATE USER ${role} WITH PASSWORD ${quoteLiteral(password)}`)
-    await client.query(`ALTER USER ${role} WITH ${attributes}`)
+    await createPostgresRole(client, {
+      username,
+      password,
+      canLogin,
+      isAdmin,
+      isSuperuser,
+      canCreateDb,
+      canCreateRole,
+      schemaNames: schemaNames ?? [],
+    })
+    const createdRole = await getPostgresRoleByName(client, username)
     await client.query("COMMIT")
     inTransaction = false
 
     return NextResponse.json({
       success: true,
-      message: `User ${username} created successfully`,
+      user: createdRole,
+      message: `PostgreSQL role ${username} created successfully`,
     })
   } catch (error) {
     if (inTransaction) {
       await client.query("ROLLBACK")
     }
-    console.error("Error creating user:", error)
+    console.error("Create PostgreSQL role error:", error)
     return NextResponse.json(
-      { success: false, error: errorMessage(error, "Failed to create user") },
+      { success: false, error: errorMessage(error, "Failed to create PostgreSQL role") },
       { status: 500 }
     )
   } finally {
@@ -177,56 +164,83 @@ export async function PUT(request: NextRequest) {
     )
   }
 
+  const oid = readOid(body.oid)
   const username = readRoleName(body.username)
-  if (!username) {
+  const password =
+    body.password === undefined || body.password === "" ? null : readRolePassword(body.password)
+  const schemaNames = readSchemaNames(body.schema_names)
+  const canLogin = readBoolean(body.can_login, true)
+  const isAdmin = readBoolean(body.is_admin)
+  const isSuperuser = readBoolean(body.is_superuser)
+  const canCreateDb = readBoolean(body.can_create_db)
+  const canCreateRole = readBoolean(body.can_create_role)
+
+  if (!oid || !username) {
     return NextResponse.json(
-      { success: false, error: "Username is required" },
+      { success: false, error: "OID and username are required" },
       { status: 400 }
     )
   }
-
-  const newPassword =
-    body.new_password === undefined || body.new_password === ""
-      ? null
-      : readPassword(body.new_password)
-  if (body.new_password !== undefined && body.new_password !== "" && !newPassword) {
+  if (body.password !== undefined && body.password !== "" && !password) {
     return NextResponse.json(
-      { success: false, error: "New password is invalid" },
+      { success: false, error: "Password is invalid" },
       { status: 400 }
     )
   }
-
-  const role = quoteIdentifier(username)
-  const attributes = roleAttributes({
-    can_create_db: bool(body.can_create_db),
-    can_create_role: bool(body.can_create_role),
-    is_superuser: bool(body.is_superuser),
-    is_replication: bool(body.is_replication),
-    bypass_rls: bool(body.bypass_rls),
-  })
+  if (schemaNames === null) {
+    return NextResponse.json(
+      { success: false, error: "Schema permissions are invalid" },
+      { status: 400 }
+    )
+  }
 
   const client = await getPool().connect()
   let inTransaction = false
   try {
+    const existingRole = await getPostgresRoleByOid(client, oid)
+    if (!existingRole) {
+      return NextResponse.json(
+        { success: false, error: "PostgreSQL role not found" },
+        { status: 404 }
+      )
+    }
+
+    const conflictingRole = await getPostgresRoleByName(client, username)
+    if (conflictingRole && conflictingRole.oid !== oid) {
+      return NextResponse.json(
+        { success: false, error: "A PostgreSQL role with this name already exists" },
+        { status: 409 }
+      )
+    }
+
     await client.query("BEGIN")
     inTransaction = true
-    await client.query(
-      `ALTER USER ${role} WITH ${attributes}${newPassword ? ` PASSWORD ${quoteLiteral(newPassword)}` : ""}`
-    )
+    await updatePostgresRole(client, existingRole.username, {
+      nextUsername: username,
+      password,
+      canLogin,
+      isAdmin,
+      isSuperuser,
+      canCreateDb,
+      canCreateRole,
+      schemaNames: schemaNames ?? [],
+    })
+    const updatedRole = await getPostgresRoleByName(client, username)
     await client.query("COMMIT")
     inTransaction = false
 
     return NextResponse.json({
       success: true,
-      message: `User ${username} updated successfully`,
+      user: updatedRole,
+      message: `PostgreSQL role ${username} updated successfully`,
     })
   } catch (error) {
     if (inTransaction) {
       await client.query("ROLLBACK")
     }
-    console.error("Error updating user:", error)
+    console.error("Update PostgreSQL role error:", error)
     return NextResponse.json(
-      { success: false, error: errorMessage(error, "Failed to update user") },
+      { success: false, error: errorMessage(error, "Failed to update PostgreSQL role") },
       { status: 500 }
     )
   } finally {
@@ -239,10 +253,10 @@ export async function DELETE(request: NextRequest) {
   if (!auth.ok) return auth.response
 
   const { searchParams } = new URL(request.url)
-  const username = readRoleName(searchParams.get("username"))
-  if (!username) {
+  const oid = readOid(searchParams.get("oid"))
+  if (!oid) {
     return NextResponse.json(
-      { success: false, error: "Username is required" },
+      { success: false, error: "OID is required" },
       { status: 400 }
     )
   }
@@ -250,38 +264,31 @@ export async function DELETE(request: NextRequest) {
   const client = await getPool().connect()
   let inTransaction = false
   try {
-    const meta = await client.query<{ current_user: string }>(
-      `SELECT current_user AS current_user`
-    )
-    const currentUser = meta.rows[0]?.current_user ?? ""
-    if (username === currentUser) {
+    const existingRole = await getPostgresRoleByOid(client, oid)
+    if (!existingRole) {
       return NextResponse.json(
-        { success: false, error: "You cannot delete the current database user." },
-        { status: 400 }
+        { success: false, error: "PostgreSQL role not found" },
+        { status: 404 }
       )
     }
 
-    const role = quoteIdentifier(username)
-    const currentRole = quoteIdentifier(currentUser)
     await client.query("BEGIN")
     inTransaction = true
-    await client.query(`REASSIGN OWNED BY ${role} TO ${currentRole}`)
-    await client.query(`DROP OWNED BY ${role}`)
-    await client.query(`DROP USER IF EXISTS ${role}`)
+    await dropPostgresRole(client, existingRole.username)
     await client.query("COMMIT")
     inTransaction = false
 
     return NextResponse.json({
       success: true,
-      message: `User ${username} deleted successfully`,
+      message: `PostgreSQL role ${existingRole.username} deleted successfully`,
     })
   } catch (error) {
     if (inTransaction) {
       await client.query("ROLLBACK")
     }
-    console.error("Error deleting user:", error)
+    console.error("Delete PostgreSQL role error:", error)
     return NextResponse.json(
-      { success: false, error: errorMessage(error, "Failed to delete user") },
+      { success: false, error: errorMessage(error, "Failed to delete PostgreSQL role") },
       { status: 500 }
     )
   } finally {

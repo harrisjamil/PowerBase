@@ -35,8 +35,9 @@ type Project = {
   table_count: number
   total_size: string
   description: string | null
-  owner_superadmin_id: number | null
-  owner_superadmin_email: string | null
+  creator_role_name: string | null
+  assigned_role_names: string[]
+  assigned_role_count: number
   status: string
   created_at: string | null
   updated_at: string | null
@@ -148,8 +149,8 @@ export default function ProjectsPage() {
   const stats = useMemo(
     () => ({
       total: projects.length,
-      assigned: projects.filter((project) => Boolean(project.owner_superadmin_id)).length,
-      unassigned: projects.filter((project) => !project.owner_superadmin_id).length,
+      assigned: projects.filter((project) => project.assigned_role_count > 0).length,
+      unassigned: projects.filter((project) => project.assigned_role_count === 0).length,
       totalTables: projects.reduce((sum, project) => sum + Number(project.table_count || 0), 0),
     }),
     [projects]
@@ -202,7 +203,7 @@ export default function ProjectsPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Assigned owners</CardTitle>
+            <CardTitle className="text-sm font-medium">Assigned projects</CardTitle>
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <span className="text-2xl font-bold">{stats.assigned}</span>
@@ -235,7 +236,8 @@ export default function ProjectsPage() {
             <TableRow>
               <TableHead>Project</TableHead>
               <TableHead>Schema</TableHead>
-              <TableHead>Owner superadmin</TableHead>
+              <TableHead>Creator</TableHead>
+              <TableHead>Assigned Users</TableHead>
               <TableHead>Tables</TableHead>
               <TableHead>Size</TableHead>
               <TableHead>DB owner</TableHead>
@@ -245,7 +247,7 @@ export default function ProjectsPage() {
           <TableBody>
             {projects.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
                   No real projects found yet.
                   <Button asChild variant="link" className="ml-2">
                     <Link href="/admin/vm/projects/new">Create one</Link>
@@ -275,10 +277,26 @@ export default function ProjectsPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    {project.owner_superadmin_email ? (
-                      <Badge variant="secondary">{project.owner_superadmin_email}</Badge>
+                    {project.creator_role_name ? (
+                      <Badge variant="secondary">{project.creator_role_name}</Badge>
                     ) : (
-                      <Badge variant="outline">Unassigned</Badge>
+                      <Badge variant="outline">No creator</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {project.assigned_role_count > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {project.assigned_role_names.slice(0, 2).map((roleName) => (
+                          <Badge key={roleName} variant="outline">
+                            {roleName}
+                          </Badge>
+                        ))}
+                        {project.assigned_role_count > 2 ? (
+                          <Badge variant="secondary">+{project.assigned_role_count - 2}</Badge>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <Badge variant="outline">No users</Badge>
                     )}
                   </TableCell>
                   <TableCell>{project.table_count}</TableCell>

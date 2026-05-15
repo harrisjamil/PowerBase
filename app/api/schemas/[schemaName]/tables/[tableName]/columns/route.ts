@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdminRequest } from "@/lib/auth/session"
+import { requirePrincipalRequest } from "@/lib/auth/principal-session"
 import { getPool } from '@/lib/db'
 import { isSafePgIdentifier, quotePgIdentifier } from "@/lib/control-schema"
-import { canAccessSchema } from "@/lib/schema-access"
+import { canPrincipalAccessSchema } from "@/lib/principal-access"
 
 type ColumnMutationBody = {
   column_name?: unknown
@@ -29,7 +29,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -45,7 +45,7 @@ export async function GET(
     const client = await getPool().connect()
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
@@ -60,6 +60,8 @@ export async function GET(
           CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END as is_nullable,
           pg_catalog.pg_get_expr(d.adbin, d.adrelid) as column_default,
           CASE WHEN pk.contype = 'p' THEN true ELSE false END as is_primary_key,
+          CASE WHEN a.attidentity <> '' THEN true ELSE false END as is_identity,
+          CASE WHEN a.attgenerated <> '' THEN true ELSE false END as is_generated,
           a.attnum as ordinal_position
         FROM pg_catalog.pg_attribute a
         JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
@@ -105,7 +107,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -132,7 +134,7 @@ export async function POST(
     const client = await getPool().connect()
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
@@ -178,7 +180,7 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -211,7 +213,7 @@ export async function PUT(
     let inTransaction = false
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },
@@ -295,7 +297,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ schemaName: string; tableName: string }> }
 ) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   try {
@@ -319,7 +321,7 @@ export async function DELETE(
     const client = await getPool().connect()
     
     try {
-      if (!(await canAccessSchema(client, auth.session.id, schemaName))) {
+      if (!(await canPrincipalAccessSchema(client, auth.session, schemaName))) {
         client.release()
         return NextResponse.json(
           { success: false, error: "You do not have access to this schema." },

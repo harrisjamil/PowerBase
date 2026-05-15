@@ -1,22 +1,34 @@
 import { NextRequest, NextResponse } from "next/server"
 import { requireAdminRequest } from "@/lib/auth/session"
+import { requirePrincipalRequest } from "@/lib/auth/principal-session"
 import { getPool } from "@/lib/db"
-import { ensureProjectsTable } from "@/lib/projects"
-import { getControlSchema, getQuotedProjectsTableRef, quotePgIdentifier } from "@/lib/control-schema"
+import { getQuotedProjectsTableRef } from "@/lib/control-schema"
+import {
+  ensureProjectRoleAssignmentsTable,
+  ensureProjectsTable,
+  getProjectRecordById,
+  getQuotedProjectRoleAssignmentsTableRef,
+  listProjectRoleAssignments,
+  removeProjectRecord,
+} from "@/lib/projects"
+import { getAccessibleSchemaNamesForPrincipal } from "@/lib/principal-access"
+import { syncProjectRoleSchemaAccess } from "@/lib/postgres-roles"
 
 type ProjectRow = {
   id: number
+  project_ref: string
   name: string
   schema_name: string
   description: string | null
   status: string
   created_at: string | null
   updated_at: string | null
-  owner_superadmin_id: number | null
-  owner_superadmin_email: string | null
+  creator_role_name: string | null
   owner: string | null
   table_count: number
   total_size: string
+  assigned_role_names: string[] | null
+  assigned_role_count: number
 }
 
 function readId(value: unknown): number | null {
@@ -30,27 +42,34 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdminRequest(request)
+  const auth = requirePrincipalRequest(request)
   if (!auth.ok) return auth.response
 
   const client = await getPool().connect()
   try {
     await ensureProjectsTable(client)
+    await ensureProjectRoleAssignmentsTable(client)
+
+    const accessibleSchemas = await getAccessibleSchemaNamesForPrincipal(client, auth.session)
     const result = await client.query<ProjectRow>(
       `
         SELECT
           projects.id,
+          projects.project_ref,
           projects.name,
           projects.schema_name,
           projects.description,
           projects.status,
           projects.created_at::text,
           projects.updated_at::text,
-          projects.owner_superadmin_id,
-          owner_user.email AS owner_superadmin_email,
+          projects.creator_role_name,
           COALESCE(pg_catalog.pg_get_userbyid(n.nspowner), 'unknown') AS owner,
-          COUNT(DISTINCT c.oid) FILTER (WHERE c.relkind IN ('r', 'v', 'm', 'p') AND c.relname NOT LIKE 'pg_%')::int AS table_count,
-          COALESCE(pg_catalog.pg_size_pretty(SUM(pg_total_relation_size(c.oid))), '0 bytes') AS total_size
+          COUNT(DISTINCT c.oid) FILTER (
+            WHERE c.relkind IN ('r', 'v', 'm', 'p') AND c.relname NOT LIKE 'pg_%'
+          )::int AS table_count,
+          COALESCE(pg_catalog.pg_size_pretty(SUM(pg_total_relation_size(c.oid))), '0 bytes') AS total_size,
+          COALESCE(assignments.assigned_role_names, ARRAY[]::text[]) AS assigned_role_names,
+          COALESCE(array_length(assignments.assigned_role_names, 1), 0)::int AS assigned_role_count
         FROM ${getQuotedProjectsTableRef()} projects
         LEFT JOIN pg_catalog.pg_namespace n
           ON n.nspname = projects.schema_name
@@ -59,29 +78,35 @@ export async function GET(request: NextRequest) {
           AND c.relkind IN ('r', 'v', 'm', 'p')
           AND c.relname NOT LIKE 'pg_%'
           AND c.relname NOT LIKE 'sql_%'
-        LEFT JOIN ${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier("superadmin")} owner_user
-          ON owner_user.id = projects.owner_superadmin_id
-        WHERE projects.owner_superadmin_id IS NULL OR projects.owner_superadmin_id = $1
+        LEFT JOIN LATERAL (
+          SELECT array_agg(assignments.role_name ORDER BY assignments.role_name) AS assigned_role_names
+          FROM ${getQuotedProjectRoleAssignmentsTableRef()} assignments
+          WHERE assignments.project_id = projects.id
+        ) assignments ON TRUE
         GROUP BY
           projects.id,
+          projects.project_ref,
           projects.name,
           projects.schema_name,
           projects.description,
           projects.status,
           projects.created_at,
           projects.updated_at,
-          projects.owner_superadmin_id,
-          owner_user.email,
-          n.nspowner
+          projects.creator_role_name,
+          n.nspowner,
+          assignments.assigned_role_names
         ORDER BY projects.created_at DESC, projects.id DESC
-      `,
-      [auth.session.id]
+      `
+    )
+
+    const visibleProjects = result.rows.filter((project) =>
+      accessibleSchemas.has(project.schema_name)
     )
 
     return NextResponse.json({
       success: true,
-      projects: result.rows,
-      count: result.rows.length,
+      projects: visibleProjects,
+      count: visibleProjects.length,
     })
   } catch (error) {
     console.error("Error fetching projects:", error)
@@ -108,37 +133,47 @@ export async function DELETE(request: NextRequest) {
   }
 
   const client = await getPool().connect()
+  let inTransaction = false
   try {
     await ensureProjectsTable(client)
+    await ensureProjectRoleAssignmentsTable(client)
 
-    const result = await client.query<{
-      id: number
-      name: string
-      schema_name: string
-      owner_superadmin_id: number | null
-    }>(
-      `
-        DELETE FROM ${getQuotedProjectsTableRef()}
-        WHERE id = $1
-          AND (owner_superadmin_id IS NULL OR owner_superadmin_id = $2)
-        RETURNING id, name, schema_name, owner_superadmin_id
-      `,
-      [id, auth.session.id]
-    )
-
-    if (result.rowCount === 0) {
+    const project = await getProjectRecordById(client, id)
+    if (!project) {
       return NextResponse.json(
-        { success: false, error: "Project not found or not accessible" },
+        { success: false, error: "Project not found" },
         { status: 404 }
       )
     }
+    if (project.creator_role_name && project.creator_role_name !== auth.session.email) {
+      return NextResponse.json(
+        { success: false, error: "Only the project creator can delete this project" },
+        { status: 403 }
+      )
+    }
+
+    const previousAssignedRoleNames = await listProjectRoleAssignments(client, project.id)
+
+    await client.query("BEGIN")
+    inTransaction = true
+
+    if (previousAssignedRoleNames.length > 0) {
+      await syncProjectRoleSchemaAccess(client, project.schema_name, previousAssignedRoleNames, [])
+    }
+    await removeProjectRecord(client, project.schema_name)
+
+    await client.query("COMMIT")
+    inTransaction = false
 
     return NextResponse.json({
       success: true,
-      message: `Project ${result.rows[0].name} deleted successfully`,
-      project: result.rows[0],
+      message: `Project ${project.name} deleted successfully`,
+      project,
     })
   } catch (error) {
+    if (inTransaction) {
+      await client.query("ROLLBACK")
+    }
     console.error("Error deleting project:", error)
     return NextResponse.json(
       { success: false, error: errorMessage(error, "Failed to delete project") },

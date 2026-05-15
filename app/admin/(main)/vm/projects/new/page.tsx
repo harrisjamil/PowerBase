@@ -7,58 +7,79 @@ import { ArrowLeft, FolderKanban } from "lucide-react"
 import {
   ProjectSetupForm,
   type ProjectFormData,
-  type ProjectSuperadmin,
+  type ProjectPgUser,
 } from "@/components/projects/project-setup-form"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 
-type SuperadminsResponse = {
+type DbUsersResponse = {
   success: boolean
   users?: Array<{
-    id: number
-    email: string
+    oid: number
+    username: string
+    can_login: boolean
+    is_system_role: boolean
   }>
+  error?: string
+}
+
+type AccountResponse = {
+  success: boolean
+  user?: {
+    email: string
+  }
   error?: string
 }
 
 export default function NewProjectPage() {
   const router = useRouter()
   const [saving, setSaving] = useState(false)
-  const [superadmins, setSuperadmins] = useState<ProjectSuperadmin[]>([])
-  const [loadingSuperadmins, setLoadingSuperadmins] = useState(true)
+  const [pgUsers, setPgUsers] = useState<ProjectPgUser[]>([])
+  const [creatorRoleName, setCreatorRoleName] = useState<string | null>(null)
+  const [loadingContext, setLoadingContext] = useState(true)
 
   useEffect(() => {
     let cancelled = false
 
-    const loadSuperadmins = async () => {
+    const loadContext = async () => {
       try {
-        const response = await fetch("/api/superadmins")
-        const result = (await response.json()) as SuperadminsResponse
+        const [usersResponse, accountResponse] = await Promise.all([
+          fetch("/api/db-users"),
+          fetch("/api/account"),
+        ])
+        const usersResult = (await usersResponse.json()) as DbUsersResponse
+        const accountResult = (await accountResponse.json()) as AccountResponse
 
-        if (!response.ok || !result.success) {
-          throw new Error(result.error || "Failed to load superadmins")
+        if (!usersResponse.ok || !usersResult.success) {
+          throw new Error(usersResult.error || "Failed to load PostgreSQL users")
+        }
+        if (!accountResponse.ok || !accountResult.success) {
+          throw new Error(accountResult.error || "Failed to load current admin")
         }
 
         if (!cancelled) {
-          setSuperadmins(
-            (result.users ?? []).map((user) => ({
-              id: String(user.id),
-              email: user.email,
+          setPgUsers(
+            (usersResult.users ?? []).map((user) => ({
+              oid: user.oid,
+              username: user.username,
+              canLogin: user.can_login,
+              isSystemRole: user.is_system_role,
             }))
           )
+          setCreatorRoleName(accountResult.user?.email ?? null)
         }
       } catch (error) {
         if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : "Failed to load superadmins")
+          toast.error(error instanceof Error ? error.message : "Failed to load project setup data")
         }
       } finally {
         if (!cancelled) {
-          setLoadingSuperadmins(false)
+          setLoadingContext(false)
         }
       }
     }
 
-    void loadSuperadmins()
+    void loadContext()
 
     return () => {
       cancelled = true
@@ -78,7 +99,7 @@ export default function NewProjectPage() {
           project_name: data.name,
           schema_name: data.schemaName,
           description: `Project schema for ${data.name}`,
-          owner_superadmin_id: data.ownerSuperadminId,
+          assigned_role_names: data.assignedRoleNames,
         }),
       })
 
@@ -115,18 +136,19 @@ export default function NewProjectPage() {
             Create Project
           </h1>
           <p className="text-sm text-muted-foreground">
-            Create a real schema-backed project and assign one superadmin owner.
+            Create a real schema-backed project and assign multiple PostgreSQL users while keeping the creator assigned.
           </p>
         </div>
       </div>
 
-      {loadingSuperadmins ? (
-        <div className="text-sm text-muted-foreground">Loading superadmins...</div>
+      {loadingContext ? (
+        <div className="text-sm text-muted-foreground">Loading project setup...</div>
       ) : (
         <ProjectSetupForm
           onSubmit={handleCreateProject}
           onCancel={() => router.push("/admin/vm/projects")}
-          superadmins={superadmins}
+          pgUsers={pgUsers}
+          creatorRoleName={creatorRoleName}
           isSubmitting={saving}
         />
       )}
