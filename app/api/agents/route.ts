@@ -72,7 +72,7 @@ async function emailBelongsToAnotherAgent(
     `,
     excludeId ? [email, excludeId] : [email]
   )
-  return result.rowCount > 0
+  return (result.rowCount ?? 0) > 0
 }
 
 export async function GET(request: NextRequest) {

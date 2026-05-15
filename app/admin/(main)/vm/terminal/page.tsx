@@ -443,7 +443,6 @@ export default function VmTerminalPage() {
             type="button"
             className="gap-2 shrink-0"
             onClick={() => setConnectOpen(true)}
-            disabled={uiConfig === "loading"}
           >
             <Plug className="h-4 w-4" />
             Connect

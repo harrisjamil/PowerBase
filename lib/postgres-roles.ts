@@ -31,11 +31,24 @@ function quoteLiteral(value: string) {
   return `'${value.replace(/'/g, "''")}'`
 }
 
+function getClientConnectionParameters(client: PoolClient) {
+  return (
+    client as PoolClient & {
+      connectionParameters?: {
+        host?: string
+        port?: number | string
+        database?: string
+      }
+    }
+  ).connectionParameters
+}
+
 function getPowerbaseAdminBootstrapKey(client: PoolClient) {
+  const connection = getClientConnectionParameters(client)
   return [
-    client.connectionParameters.host || "",
-    String(client.connectionParameters.port || ""),
-    client.connectionParameters.database || "",
+    connection?.host || "",
+    String(connection?.port || ""),
+    connection?.database || "",
     "powerbase-admin-role",
   ].join("::")
 }
@@ -136,7 +149,8 @@ async function roleExists(client: PoolClient, roleName: string) {
 }
 
 async function getDatabaseName(client: PoolClient) {
-  return client.connectionParameters.database || getEffectiveParsed().database || "postgres"
+  const connection = getClientConnectionParameters(client)
+  return connection?.database || getEffectiveParsed().database || "postgres"
 }
 
 export async function ensurePowerbaseAdminRole(client: PoolClient) {

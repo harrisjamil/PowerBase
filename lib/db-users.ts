@@ -29,15 +29,29 @@ export type ManagedDbUserAssignment = {
   schema_name: string | null
 }
 
+function getClientConnectionParameters(client: PoolClient) {
+  return (
+    client as PoolClient & {
+      connectionParameters?: {
+        host?: string
+        port?: number | string
+        database?: string
+      }
+    }
+  ).connectionParameters
+}
+
 function getDatabaseName(client: PoolClient) {
-  return client.connectionParameters.database || getEffectiveParsed().database || "postgres"
+  const connection = getClientConnectionParameters(client)
+  return connection?.database || getEffectiveParsed().database || "postgres"
 }
 
 function getDbUsersBootstrapKey(client: PoolClient) {
+  const connection = getClientConnectionParameters(client)
   return [
-    client.connectionParameters.host || "",
-    String(client.connectionParameters.port || ""),
-    client.connectionParameters.database || "",
+    connection?.host || "",
+    String(connection?.port || ""),
+    connection?.database || "",
     getControlSchema(),
     "db-users",
   ].join("::")
@@ -295,7 +309,7 @@ export async function usernameBelongsToAnotherDbUser(
     excludeId ? [username, excludeId] : [username]
   )
 
-  return result.rowCount > 0
+  return (result.rowCount ?? 0) > 0
 }
 
 export async function getProjectForManagedDbUser(

@@ -88,6 +88,12 @@ function readSchemaNames(value: unknown): string[] | null | undefined {
   return Array.from(deduped).sort((left, right) => left.localeCompare(right))
 }
 
+function hasSchemaNames(
+  value: string[] | null | undefined
+): value is string[] {
+  return value !== undefined && value !== null
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
 }
@@ -227,7 +233,7 @@ export async function POST(request: NextRequest) {
   try {
     await ensureSchemaAccessTable(client)
     if (
-      schemaNames !== undefined &&
+      hasSchemaNames(schemaNames) &&
       !(await areSchemaNamesAccessibleToAdmin(client, auth.session.id, schemaNames))
     ) {
       return NextResponse.json(
@@ -247,7 +253,7 @@ export async function POST(request: NextRequest) {
       `,
       [email, hashPassword(password), test]
     )
-    if (schemaNames !== undefined) {
+    if (hasSchemaNames(schemaNames)) {
       await syncAssignedSchemas(client, result.rows[0].id, schemaNames)
     }
     await syncAllIdentityDbRoles(client)
@@ -260,7 +266,7 @@ export async function POST(request: NextRequest) {
         ...result.rows[0],
         db_role_name: getSuperadminDbRoleName(result.rows[0].id),
         assigned_schemas:
-          schemaNames !== undefined
+          hasSchemaNames(schemaNames)
             ? schemaNames
             : await listAssignedSchemaNames(client, result.rows[0].id),
       },
@@ -339,7 +345,7 @@ export async function PUT(request: NextRequest) {
   try {
     await ensureSchemaAccessTable(client)
     if (
-      schemaNames !== undefined &&
+      hasSchemaNames(schemaNames) &&
       !(await areSchemaNamesAccessibleToAdmin(client, auth.session.id, schemaNames))
     ) {
       return NextResponse.json(
@@ -369,7 +375,7 @@ export async function PUT(request: NextRequest) {
         { status: 404 }
       )
     }
-    if (schemaNames !== undefined) {
+    if (hasSchemaNames(schemaNames)) {
       await syncAssignedSchemas(client, result.rows[0].id, schemaNames)
     }
     await syncAllIdentityDbRoles(client)
@@ -382,7 +388,7 @@ export async function PUT(request: NextRequest) {
         ...result.rows[0],
         db_role_name: getSuperadminDbRoleName(result.rows[0].id),
         assigned_schemas:
-          schemaNames !== undefined
+          hasSchemaNames(schemaNames)
             ? schemaNames
             : await listAssignedSchemaNames(client, result.rows[0].id),
       },
