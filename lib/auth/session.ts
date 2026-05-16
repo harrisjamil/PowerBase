@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto"
 import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
+import { useSecureSessionCookies } from "@/lib/auth/cookie-secure"
 import { getControlSchema } from "@/lib/control-schema"
 
 const SESSION_COOKIE_NAME = "powerbase_admin_session"
@@ -142,7 +143,7 @@ export function setAdminSessionCookie(response: NextResponse, session: AdminSess
     value: createAdminSessionToken(session),
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureSessionCookies(),
     maxAge: SESSION_MAX_AGE_SECONDS,
     path: "/",
   })
@@ -155,7 +156,7 @@ export function clearAdminSessionCookie(response: NextResponse): NextResponse {
     value: "",
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: useSecureSessionCookies(),
     maxAge: 0,
     path: "/",
   })

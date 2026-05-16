@@ -6,6 +6,10 @@ export const CONTROL_TABLE_NAME = "superadmin"
 export const AGENTS_TABLE_NAME = "agents"
 export const PROJECTS_TABLE_NAME = "projects"
 export const DB_USERS_TABLE_NAME = "db_users"
+export const PLATFORM_SETTINGS_TABLE_NAME = "platform_settings"
+export const ADMIN_TOTP_TABLE_NAME = "admin_totp"
+export const ADMIN_TOTP_PENDING_TABLE_NAME = "admin_totp_pending"
+export const PLATFORM_INTEGRATIONS_TABLE_NAME = "platform_integrations"
 
 export function isSafePgIdentifier(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(value)
@@ -41,4 +45,20 @@ export function getQuotedProjectsTableRef(): string {
 
 export function getQuotedDbUsersTableRef(): string {
   return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(DB_USERS_TABLE_NAME)}`
+}
+
+export function getQuotedPlatformSettingsTableRef(): string {
+  return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(PLATFORM_SETTINGS_TABLE_NAME)}`
+}
+
+export function getQuotedAdminTotpTableRef(): string {
+  return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(ADMIN_TOTP_TABLE_NAME)}`
+}
+
+export function getQuotedAdminTotpPendingTableRef(): string {
+  return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(ADMIN_TOTP_PENDING_TABLE_NAME)}`
+}
+
+export function getQuotedPlatformIntegrationsTableRef(): string {
+  return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(PLATFORM_INTEGRATIONS_TABLE_NAME)}`
 }

@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { isAdminTotpEnrolled } from "@/lib/admin-totp"
+import { createLoginChallenge } from "@/lib/auth/login-challenge"
 import { createAdminSession, setAdminSessionCookie } from "@/lib/auth/session"
 import { getControlSchema } from "@/lib/control-schema"
 import { getPool } from "@/lib/db"
@@ -57,6 +59,20 @@ export async function POST(req: Request) {
           { error: "PostgreSQL role not found" },
           { status: 404 }
         )
+      }
+
+      const totpEnrolled = await isAdminTotpEnrolled(client, role.oid)
+
+      if (totpEnrolled) {
+        return NextResponse.json({
+          success: true,
+          requiresTotp: true,
+          loginChallenge: createLoginChallenge({
+            roleOid: role.oid,
+            username: role.username,
+            controlSchema: getControlSchema(),
+          }),
+        })
       }
 
       const response = NextResponse.json({
