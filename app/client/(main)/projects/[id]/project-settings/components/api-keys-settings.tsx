@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Card,
@@ -22,6 +22,7 @@ import {
   EyeOff,
   AlertTriangle,
   RefreshCw,
+  Loader2,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -44,46 +45,86 @@ type APIKey = {
   last_used?: string;
 };
 
+type ApiKeysResponse = {
+  success: boolean;
+  project_url?: string;
+  schema_name?: string;
+  api_keys?: APIKey[];
+  error?: string;
+};
+
 export function ApiKeysSettings() {
   const params = useParams();
   const projectId = params?.id as string;
 
+  const [apiKeys, setApiKeys] = useState<APIKey[]>([]);
+  const [projectUrl, setProjectUrl] = useState("");
+  const [schemaName, setSchemaName] = useState("");
+  const [loading, setLoading] = useState(true);
   const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({});
   const [isRegenerating, setIsRegenerating] = useState<string | null>(null);
   const [showRegenerateDialog, setShowRegenerateDialog] = useState<string | null>(null);
   const [legacyKeysDisabled, setLegacyKeysDisabled] = useState(false);
   const [jwtKeysDisabled, setJwtKeysDisabled] = useState(false);
 
-  const [apiKeys] = useState<APIKey[]>([
-    {
-      id: "1",
-      name: "anon public",
-      key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNnZCIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzMyMTUyNjAwLCJleHAiOjIwNDc3Mjg2MDB9.demo",
-      type: "anon",
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: "2",
-      name: "service_role",
-      key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNnZCIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJpYXQiOjE3MzIxNTI2MDAsImV4cCI6MjA0NzcyODYwMH0.secret",
-      type: "service_role",
-      created_at: new Date().toISOString(),
-    },
-  ]);
+  const loadApiKeys = useCallback(async () => {
+    if (!projectId) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/projects/${projectId}/api-keys`, {
+        cache: "no-store",
+      });
+      const data = (await response.json()) as ApiKeysResponse;
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Failed to load API keys");
+      }
+
+      setApiKeys(data.api_keys ?? []);
+      setProjectUrl(data.project_url ?? "");
+      setSchemaName(data.schema_name ?? "");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load API keys");
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadApiKeys();
+  }, [loadApiKeys]);
 
   const handleCopyKey = (key: string) => {
     void navigator.clipboard.writeText(key);
     toast.success("API key copied to clipboard");
   };
 
-  const handleRegenerateKey = async (keyId: string) => {
-    setIsRegenerating(keyId);
+  const handleRegenerateKey = async (keyType: "anon" | "service_role") => {
+    setIsRegenerating(keyType);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const response = await fetch(`/api/projects/${projectId}/api-keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: keyType }),
+      });
+      const data = (await response.json()) as {
+        success: boolean;
+        api_key?: APIKey;
+        error?: string;
+      };
+
+      if (!response.ok || !data.success || !data.api_key) {
+        throw new Error(data.error || "Failed to regenerate API key");
+      }
+
+      setApiKeys((current) =>
+        current.map((entry) => (entry.type === keyType ? data.api_key! : entry))
+      );
       toast.success("API key regenerated successfully");
       setShowRegenerateDialog(null);
-    } catch {
-      toast.error("Failed to regenerate API key");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to regenerate API key");
     } finally {
       setIsRegenerating(null);
     }
@@ -101,31 +142,80 @@ export function ApiKeysSettings() {
     }));
   };
 
+  const regeneratingKey = apiKeys.find((entry) => entry.type === showRegenerateDialog);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16 text-muted-foreground">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        Loading API keys...
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Project URL</CardTitle>
-          <CardDescription>API endpoint for your project</CardDescription>
+          <CardDescription>API endpoint for this project</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <div className="flex items-center gap-2">
-            <code className="flex-1 rounded bg-muted px-3 py-2 text-sm">
-              https://{projectId}.supabase.co
+            <code className="flex-1 rounded bg-muted px-3 py-2 text-sm break-all">
+              {projectUrl || "—"}
             </code>
             <Button
               variant="outline"
               size="sm"
+              disabled={!projectUrl}
               onClick={() => {
-                void navigator.clipboard.writeText(`https://${projectId}.supabase.co`);
+                if (!projectUrl) return;
+                void navigator.clipboard.writeText(projectUrl);
                 toast.success("URL copied");
               }}
             >
               <Copy className="h-4 w-4" />
             </Button>
           </div>
+          {schemaName ? (
+            <p className="text-xs text-muted-foreground">
+              Backed by PostgreSQL schema <span className="font-mono">{schemaName}</span>
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Use with your <span className="font-mono">anon</span> key plus a PostgreSQL user assigned to
+            this project (<span className="font-mono">x-powerbase-pg-user</span> /{" "}
+            <span className="font-mono">x-powerbase-pg-password</span> headers).
+          </p>
         </CardContent>
       </Card>
+
+      {projectUrl && apiKeys.some((key) => key.type === "anon") ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Connect from another app</CardTitle>
+            <CardDescription>
+              Copy <span className="font-mono">lib/powerbase-client.ts</span> into your repo.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <pre className="overflow-x-auto rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">
+              {`import { createPowerBaseClient } from "@/lib/powerbase-client";
+
+const db = createPowerBaseClient({
+  url: "${projectUrl}",
+  apiKey: process.env.POWERBASE_ANON_KEY!,
+  pgUser: process.env.POWERBASE_REST_PG_USER!,
+  pgPassword: process.env.POWERBASE_REST_PG_PASSWORD!,
+});
+
+await db.from("users").insert({ id: "2", full_name: "Jane" });
+const { data, error } = await db.from("users").select();`}
+            </pre>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -133,7 +223,7 @@ export function ApiKeysSettings() {
             <div>
               <CardTitle className="text-base">Project API keys</CardTitle>
               <CardDescription>
-                Your API keys are required for all client and server requests
+                JWT keys for this project. Created automatically when the project is registered.
               </CardDescription>
             </div>
             <Badge variant="outline" className="font-mono">
@@ -142,6 +232,12 @@ export function ApiKeysSettings() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          {apiKeys.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No API keys found. Keys are created when a schema is registered as a project from the
+              admin dashboard.
+            </p>
+          ) : null}
           {apiKeys.map((apiKey) => (
             <div key={apiKey.id} className="space-y-3">
               <div className="flex items-center justify-between">
@@ -177,7 +273,7 @@ export function ApiKeysSettings() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setShowRegenerateDialog(apiKey.id)}
+                    onClick={() => setShowRegenerateDialog(apiKey.type)}
                   >
                     <RefreshCw className="h-4 w-4" />
                   </Button>
@@ -190,9 +286,8 @@ export function ApiKeysSettings() {
 
               {apiKey.type === "anon" && (
                 <p className="text-xs text-muted-foreground">
-                  This key is safe to use in a browser if you have enabled Row Level Security
-                  for your tables and configured policies. Prefer using Publishable API keys
-                  instead.
+                  Safe for browser use when row-level security is configured. Use with the project
+                  URL and schema-backed REST endpoints.
                 </p>
               )}
 
@@ -203,9 +298,8 @@ export function ApiKeysSettings() {
                     <div className="text-sm text-red-700 dark:text-red-300">
                       <p className="font-medium">Warning</p>
                       <p>
-                        This key has the ability to bypass Row Level Security. Never share it
-                        publicly. If leaked, generate a new JWT secret immediately. Prefer using
-                        Secret API keys instead.
+                        This key bypasses client-side restrictions. Never expose it publicly. If
+                        leaked, regenerate it immediately.
                       </p>
                     </div>
                   </div>
@@ -257,14 +351,17 @@ export function ApiKeysSettings() {
           <AlertDialogHeader>
             <AlertDialogTitle>Regenerate API key</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. Any applications using this key will lose access
-              and must be updated with the new key.
+              This action cannot be undone. Any applications using the{" "}
+              {regeneratingKey?.name ?? "selected"} key will lose access and must be updated.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => showRegenerateDialog && void handleRegenerateKey(showRegenerateDialog)}
+              onClick={() =>
+                showRegenerateDialog &&
+                void handleRegenerateKey(showRegenerateDialog as "anon" | "service_role")
+              }
               disabled={isRegenerating === showRegenerateDialog}
               className="bg-red-600 hover:bg-red-700"
             >

@@ -9,8 +9,8 @@ import {
   createDbUserSession,
   setDbUserSessionCookie,
 } from "@/lib/auth/db-user-session"
-import { listRoleProjectAssignments } from "@/lib/projects"
 import { readDbUsername } from "@/lib/db-users"
+import { pgUserHasAnyProjectAccess } from "@/lib/teams"
 
 export async function POST(req: Request) {
   let body: unknown
@@ -41,19 +41,20 @@ export async function POST(req: Request) {
 
   const client = await getPool().connect()
   try {
-    const [dbUser, assignments] = await Promise.all([
-      getPostgresRoleByName(client, username),
-      listRoleProjectAssignments(client, username),
-    ])
+    const dbUser = await getPostgresRoleByName(client, username)
     if (!dbUser) {
       return NextResponse.json(
         { error: "PostgreSQL role not found" },
         { status: 404 }
       )
     }
-    if (assignments.length === 0) {
+    const hasProjectAccess = await pgUserHasAnyProjectAccess(client, username)
+    if (!hasProjectAccess) {
       return NextResponse.json(
-        { error: "This PostgreSQL user is not assigned to any project in PowerBase" },
+        {
+          error:
+            "This PostgreSQL user is not assigned to any project in PowerBase (directly or via a team)",
+        },
         { status: 403 }
       )
     }

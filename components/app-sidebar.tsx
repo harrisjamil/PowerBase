@@ -55,16 +55,8 @@ const data = {
 
     },
     {
-      title: "Projects",
-      url: "#",
-      icon: (
-        <FolderIcon
-        />
-      ),
-    },
-    {
       title: "Team",
-      url: "#",
+      url: "/admin/team",
       icon: (
         <UsersIcon
         />

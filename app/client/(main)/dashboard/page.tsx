@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePeriodicCallback } from "@/hooks/use-periodic-callback";
 import {
   ArrowUpDown,
   Database,
@@ -12,6 +13,7 @@ import {
   RefreshCw,
   Search,
   Shield,
+  Users,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -41,6 +43,9 @@ type Project = {
   status: string;
   created_at: string | null;
   updated_at: string | null;
+  access_via_individual?: boolean;
+  access_via_team?: boolean;
+  team_names?: string[];
 };
 
 type ProjectsResponse = {
@@ -95,10 +100,10 @@ export default function ClientDashboardPage() {
   const [sortBy, setSortBy] = useState<SortOption>("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
 
-  const loadProjects = useCallback(async (options?: { refresh?: boolean }) => {
-    if (options?.refresh) {
+  const loadProjects = useCallback(async (options?: { refresh?: boolean; silent?: boolean }) => {
+    if (options?.refresh && !options?.silent) {
       setRefreshing(true);
-    } else {
+    } else if (!options?.silent) {
       setLoading(true);
     }
 
@@ -155,6 +160,10 @@ export default function ClientDashboardPage() {
       cancelled = true;
     };
   }, []);
+
+  usePeriodicCallback(() => {
+    void loadProjects({ silent: true });
+  }, 5_000);
 
   const filteredProjects = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -478,7 +487,7 @@ function ProjectGrid({
           </h3>
           <p className="mt-1 text-sm text-gray-500">
             {projects.length === 0
-              ? "Ask your admin to assign a project to this database user."
+              ? "Ask your admin to assign a project directly or add you as a team admin."
               : "Try adjusting your search or filter."}
           </p>
           {projects.length > 0 ? (
@@ -503,7 +512,21 @@ function ProjectGrid({
                     <Database className="h-5 w-5 text-gray-600" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-semibold leading-tight text-gray-900">{project.name}</h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold leading-tight text-gray-900">{project.name}</h3>
+                      {project.access_via_team ? (
+                        <Badge className="gap-1 border-purple-200 bg-purple-50 text-[10px] font-medium text-purple-700">
+                          <Users className="h-3 w-3" />
+                          {project.team_names && project.team_names.length > 0
+                            ? `Team: ${project.team_names.join(", ")}`
+                            : "Team assigned"}
+                        </Badge>
+                      ) : project.access_via_individual ? (
+                        <Badge className="gap-1 border-blue-200 bg-blue-50 text-[10px] font-medium text-blue-700">
+                          Direct access
+                        </Badge>
+                      ) : null}
+                    </div>
                     <p className="mt-1 font-mono text-xs text-gray-500">{project.schema_name}</p>
                   </div>
                 </div>

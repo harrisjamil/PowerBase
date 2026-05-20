@@ -10,6 +10,7 @@ import {
 import { ensureDbBootstrap } from "@/lib/db-bootstrap-cache"
 import { allocateUniqueProjectRef, parseProjectLookup } from "@/lib/project-ref"
 import { buildProjectSchemaName } from "@/lib/project-names"
+import { ensureProjectApiKeys } from "@/lib/project-api-keys"
 
 export const PROJECT_ROLE_ASSIGNMENTS_TABLE_NAME = "project_role_assignments"
 
@@ -243,7 +244,12 @@ export async function upsertProjectRecord(
     ]
   )
 
-  return result.rows[0]
+  const project = result.rows[0]
+  if (project) {
+    await ensureProjectApiKeys(client, project.id, project.project_ref)
+  }
+
+  return project
 }
 
 export async function getProjectRecordBySchemaName(client: PoolClient, schemaName: string) {

@@ -15,6 +15,7 @@ import {
   renameProjectRecord,
   replaceProjectRoleAssignments,
 } from "@/lib/projects"
+import { listEffectiveProjectAssignees } from "@/lib/project-team-sync"
 import { canPrincipalAccessSchema } from "@/lib/principal-access"
 import {
   listMissingPostgresRoleNames,
@@ -339,18 +340,47 @@ export async function PATCH(
 
     let nextAssignedRoleNames = previousAssignedRoleNames
     if (assignedRoleNamesProvided) {
+      const previousEffectiveAssignees = await listEffectiveProjectAssignees(
+        client,
+        project.id,
+        creatorRoleName
+      )
+      const previousEffectiveLower = new Set(
+        previousEffectiveAssignees.map((name) => name.toLowerCase())
+      )
+      const nextLower = new Set(nextRequestedRoleNames.map((name) => name.toLowerCase()))
+      const addedUsernames = nextRequestedRoleNames.filter(
+        (name) => !previousEffectiveLower.has(name.toLowerCase())
+      )
+      const removedUsernames = previousEffectiveAssignees.filter(
+        (name) => !nextLower.has(name.toLowerCase())
+      )
+
       nextAssignedRoleNames = await replaceProjectRoleAssignments(
         client,
         project.id,
         nextRequestedRoleNames,
         creatorRoleName
       )
+
+      const { syncPgUserToProjectTeams } = await import("@/lib/project-team-sync")
+      for (const username of removedUsernames) {
+        if (creatorRoleName && username.toLowerCase() === creatorRoleName.toLowerCase()) {
+          continue
+        }
+        await syncPgUserToProjectTeams(client, project.id, username, false)
+      }
+
       await syncProjectRoleSchemaAccess(
         client,
         project.schema_name,
-        previousAssignedRoleNames,
+        previousEffectiveAssignees,
         nextAssignedRoleNames
       )
+
+      for (const username of addedUsernames) {
+        await syncPgUserToProjectTeams(client, project.id, username, true)
+      }
     }
 
     await client.query("COMMIT")

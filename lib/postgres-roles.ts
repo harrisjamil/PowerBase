@@ -414,6 +414,7 @@ export async function syncProjectRoleSchemaAccess(
   previousRoleNames: string[],
   nextRoleNames: string[]
 ) {
+  const { canPgUserAccessProjectSchema } = await import("@/lib/teams")
   const previous = new Set(previousRoleNames.map((roleName) => roleName.trim()).filter(Boolean))
   const next = new Set(nextRoleNames.map((roleName) => roleName.trim()).filter(Boolean))
   const allRoleNames = new Set([...previous, ...next])
@@ -424,7 +425,10 @@ export async function syncProjectRoleSchemaAccess(
       continue
     }
 
-    await revokeSchemaPrivilegesFromRole(client, roleName, schemaName)
+    const stillHasAccess = await canPgUserAccessProjectSchema(client, roleName, schemaName)
+    if (!stillHasAccess) {
+      await revokeSchemaPrivilegesFromRole(client, roleName, schemaName)
+    }
   }
 }
 

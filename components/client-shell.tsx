@@ -1,9 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { useParams } from "next/navigation"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useParams, useRouter } from "next/navigation"
+import { toast } from "sonner"
 import { ClientAppSidebar } from "@/components/client-app-sidebar"
 import { ClientSiteHeader } from "@/components/client-site-header"
+import { usePeriodicCallback } from "@/hooks/use-periodic-callback"
 import {
   SidebarInset,
   SidebarProvider,
@@ -16,6 +18,8 @@ type ProjectSummary = {
   status: string
 }
 
+const PROJECT_ACCESS_POLL_MS = 5_000
+
 export function ClientShell({
   currentUser,
   children,
@@ -23,45 +27,60 @@ export function ClientShell({
   currentUser: { name: string; email: string }
   children: React.ReactNode
 }) {
+  const router = useRouter()
   const params = useParams()
   const projectId = typeof params?.id === "string" ? params.id : null
   const [project, setProject] = useState<ProjectSummary | null>(null)
+  const hadProjectAccessRef = useRef(false)
 
-  useEffect(() => {
+  const syncProjectAccess = useCallback(async () => {
     if (!projectId) {
+      hadProjectAccessRef.current = false
       setProject(null)
       return
     }
 
-    let cancelled = false
-
-    const loadProject = async () => {
-      try {
-        const response = await fetch(`/api/projects/${projectId}?lite=1`)
-        const data = (await response.json()) as {
-          success: boolean
-          project?: ProjectSummary
-        }
-        if (!cancelled && response.ok && data.success && data.project) {
-          setProject({
-            name: data.project.name,
-            schema_name: data.project.schema_name,
-            status: data.project.status,
-          })
-        }
-      } catch {
-        if (!cancelled) {
-          setProject(null)
-        }
+    try {
+      const response = await fetch(`/api/projects/${projectId}?lite=1`, {
+        cache: "no-store",
+      })
+      const data = (await response.json()) as {
+        success: boolean
+        project?: ProjectSummary
       }
-    }
 
-    void loadProject()
+      if (response.ok && data.success && data.project) {
+        hadProjectAccessRef.current = true
+        setProject({
+          name: data.project.name,
+          schema_name: data.project.schema_name,
+          status: data.project.status,
+        })
+        return
+      }
 
-    return () => {
-      cancelled = true
+      if (hadProjectAccessRef.current) {
+        toast.info("You no longer have access to this project")
+        router.replace("/client/dashboard")
+      } else if (!response.ok || !data.success) {
+        router.replace("/client/dashboard")
+      }
+
+      hadProjectAccessRef.current = false
+      setProject(null)
+    } catch {
+      // Keep the current view on transient network errors.
     }
-  }, [projectId])
+  }, [projectId, router])
+
+  useEffect(() => {
+    hadProjectAccessRef.current = false
+    void syncProjectAccess()
+  }, [syncProjectAccess])
+
+  usePeriodicCallback(() => {
+    void syncProjectAccess()
+  }, PROJECT_ACCESS_POLL_MS, Boolean(projectId))
 
   return (
     <SidebarProvider

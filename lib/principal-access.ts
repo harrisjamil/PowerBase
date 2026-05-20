@@ -7,6 +7,10 @@ import {
   getAccessibleProjectSchemaNamesForRole,
   getProjectRecordBySchemaName,
 } from "@/lib/projects"
+import {
+  canPgUserAccessProjectSchema,
+  getAccessibleProjectSchemaNamesForPgUser,
+} from "@/lib/teams"
 
 async function listNonProjectSchemaNames(client: PoolClient) {
   await ensureProjectsTable(client)
@@ -64,7 +68,10 @@ export async function getAccessibleSchemaNamesForPrincipal(
     return accessibleSchemas
   }
 
-  const accessibleSchemas = await getAccessibleProjectSchemaNamesForRole(client, principal.username)
+  const accessibleSchemas = await getAccessibleProjectSchemaNamesForPgUser(
+    client,
+    principal.username
+  )
   accessibleSchemas.delete(getControlSchema())
   return accessibleSchemas
 }
@@ -86,5 +93,5 @@ export async function canPrincipalAccessSchema(
     return canRoleAccessProjectSchema(client, principal.email, schemaName)
   }
 
-  return canRoleAccessProjectSchema(client, principal.username, schemaName)
+  return canPgUserAccessProjectSchema(client, principal.username, schemaName)
 }
