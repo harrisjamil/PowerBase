@@ -14,6 +14,8 @@ export const PLATFORM_INTEGRATIONS_TABLE_NAME = "platform_integrations"
 export const TEAMS_TABLE_NAME = "teams"
 export const TEAM_MEMBERS_TABLE_NAME = "team_members"
 export const TEAM_PROJECT_ASSIGNMENTS_TABLE_NAME = "team_project_assignments"
+export const DATA_LIBRARY_ASSETS_TABLE_NAME = "data_library_assets"
+export const DATA_LIBRARY_FOLDERS_TABLE_NAME = "data_library_folders"
 
 export function isSafePgIdentifier(value: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_$]{0,62}$/.test(value)
@@ -29,6 +31,10 @@ export function getControlSchema(): string {
     return configured
   }
   return DEFAULT_CONTROL_SCHEMA
+}
+
+export function isControlSchema(schemaName: string): boolean {
+  return schemaName === getControlSchema()
 }
 
 export async function ensureControlSchema(client: PoolClient) {
@@ -81,4 +87,12 @@ export function getQuotedTeamMembersTableRef(): string {
 
 export function getQuotedTeamProjectAssignmentsTableRef(): string {
   return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(TEAM_PROJECT_ASSIGNMENTS_TABLE_NAME)}`
+}
+
+export function getQuotedDataLibraryAssetsTableRef(): string {
+  return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(DATA_LIBRARY_ASSETS_TABLE_NAME)}`
+}
+
+export function getQuotedDataLibraryFoldersTableRef(): string {
+  return `${quotePgIdentifier(getControlSchema())}.${quotePgIdentifier(DATA_LIBRARY_FOLDERS_TABLE_NAME)}`
 }

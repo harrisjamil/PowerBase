@@ -1,117 +1,103 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
+import Link from "next/link"
 import {
   Card,
-  CardAction,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { TrendingUpIcon, TrendingDownIcon, UsersIcon } from "lucide-react"
+import type { AdminDashboardStats } from "@/lib/admin-dashboard"
+import {
+  DatabaseIcon,
+  FolderKanbanIcon,
+  HardDriveIcon,
+  LibraryIcon,
+  UsersIcon,
+  UserRoundIcon,
+} from "lucide-react"
 
-// Mock data - in real app, this would come from your API/state
-const agentsData = {
-  totalAgents: 24,
-  previousTotal: 18,
-  growth: "+33.3%",
+const emptyStats: AdminDashboardStats = {
+  projects: 0,
+  activeProjects: 0,
+  schemas: 0,
+  teams: 0,
+  dbUsers: 0,
+  agents: 0,
+  libraryAssets: 0,
+  totalTables: 0,
+  dbSizeBytes: 0,
+  dbSizePretty: "—",
+  activeConnections: 0,
 }
 
-export function SectionCards() {
-  return (
-    <div className="grid grid-cols-1 gap-4 px-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs lg:px-6 @xl/main:grid-cols-2 @5xl/main:grid-cols-4 dark:*:data-[slot=card]:bg-card">
-      <Card className="@container/card">
-        <CardHeader>
-          <CardDescription>Total Revenue</CardDescription>
-          <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            $1,250.00
-          </CardTitle>
-          <CardAction>
-            <Badge variant="outline">
-              <TrendingUpIcon className="size-3" />
-              +12.5%
-            </Badge>
-          </CardAction>
-        </CardHeader>
-        <CardFooter className="flex-col items-start gap-1.5 text-sm">
-          <div className="line-clamp-1 flex gap-2 font-medium">
-            Trending up this month{" "}
-            <TrendingUpIcon className="size-4" />
-          </div>
-          <div className="text-muted-foreground">
-            Visitors for the last 6 months
-          </div>
-        </CardFooter>
-      </Card>
-      
-      <Card className="@container/card">
-        <CardHeader>
-          <CardDescription>Total Agents</CardDescription>
-          <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            {agentsData.totalAgents}
-          </CardTitle>
-          <CardAction>
-            <Badge variant="outline" className="gap-1">
-              <TrendingUpIcon className="size-3" />
-              {agentsData.growth}
-            </Badge>
-          </CardAction>
-        </CardHeader>
-        <CardFooter className="flex-col items-start gap-1.5 text-sm">
-          <div className="line-clamp-1 flex gap-2 font-medium">
-            <UsersIcon className="size-4" />
-            Total registered agents
-          </div>
-          <div className="text-muted-foreground">
-            {agentsData.growth} increase from last month
-          </div>
-        </CardFooter>
-      </Card>
+type SectionCardsProps = {
+  stats?: AdminDashboardStats
+}
 
-      <Card className="@container/card">
-        <CardHeader>
-          <CardDescription>Active Accounts</CardDescription>
-          <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            45,678
-          </CardTitle>
-          <CardAction>
-            <Badge variant="outline">
-              <TrendingUpIcon className="size-3" />
-              +12.5%
-            </Badge>
-          </CardAction>
-        </CardHeader>
-        <CardFooter className="flex-col items-start gap-1.5 text-sm">
-          <div className="line-clamp-1 flex gap-2 font-medium">
-            Strong user retention{" "}
-            <TrendingUpIcon className="size-4" />
-          </div>
-          <div className="text-muted-foreground">Engagement exceed targets</div>
-        </CardFooter>
-      </Card>
-      
-      <Card className="@container/card">
-        <CardHeader>
-          <CardDescription>Growth Rate</CardDescription>
-          <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            4.5%
-          </CardTitle>
-          <CardAction>
-            <Badge variant="outline">
-              <TrendingUpIcon className="size-3" />
-              +4.5%
-            </Badge>
-          </CardAction>
-        </CardHeader>
-        <CardFooter className="flex-col items-start gap-1.5 text-sm">
-          <div className="line-clamp-1 flex gap-2 font-medium">
-            Steady performance increase{" "}
-            <TrendingUpIcon className="size-4" />
-          </div>
-          <div className="text-muted-foreground">Meets growth projections</div>
-        </CardFooter>
-      </Card>
+export function SectionCards({ stats = emptyStats }: SectionCardsProps) {
+  const cards = [
+    {
+      label: "VM Projects",
+      value: stats.projects,
+      hint: `${stats.activeProjects} active`,
+      href: "/admin/vm/projects",
+      icon: FolderKanbanIcon,
+    },
+    {
+      label: "Schemas",
+      value: stats.schemas,
+      hint: `${stats.totalTables} tables`,
+      href: "/admin/schemas",
+      icon: DatabaseIcon,
+    },
+    {
+      label: "Teams",
+      value: stats.teams,
+      hint: "Collaboration groups",
+      href: "/admin/team",
+      icon: UsersIcon,
+    },
+    {
+      label: "DB Users",
+      value: stats.dbUsers,
+      hint: "Managed logins",
+      href: "/admin/admin",
+      icon: UserRoundIcon,
+    },
+    {
+      label: "Library",
+      value: stats.libraryAssets,
+      hint: "Catalog entries",
+      href: "/admin/data-library",
+      icon: LibraryIcon,
+    },
+    {
+      label: "Database",
+      value: stats.dbSizePretty,
+      hint: `${stats.activeConnections} connections`,
+      href: "/admin/vm",
+      icon: HardDriveIcon,
+    },
+  ] as const
+
+  return (
+    <div className="grid grid-cols-1 gap-4 px-4 lg:px-6 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      {cards.map((card) => (
+        <Link key={card.href} href={card.href}>
+          <Card className="h-full transition-shadow hover:shadow-md">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardDescription>{card.label}</CardDescription>
+                <card.icon className="size-4 text-muted-foreground" />
+              </div>
+              <CardTitle className="text-2xl font-semibold tabular-nums">{card.value}</CardTitle>
+            </CardHeader>
+            <CardFooter className="text-sm text-muted-foreground">{card.hint}</CardFooter>
+          </Card>
+        </Link>
+      ))}
     </div>
   )
 }

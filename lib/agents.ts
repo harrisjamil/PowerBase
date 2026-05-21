@@ -6,6 +6,7 @@ import {
   getQuotedControlTableRef,
   quotePgIdentifier,
 } from "@/lib/control-schema"
+import { ensureSuperadminTable } from "@/lib/superadmin-table"
 
 export type AgentRecord = {
   id: number
@@ -24,6 +25,8 @@ export function readAgentEmail(value: unknown): string | null {
 }
 
 export async function ensureAgentsTable(client: PoolClient) {
+  await ensureSuperadminTable(client)
+
   const tableRef = getQuotedAgentsTableRef()
   const superadminRef = getQuotedControlTableRef()
   const sequenceName = `${AGENTS_TABLE_NAME}_id_seq`

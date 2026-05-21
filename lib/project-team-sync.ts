@@ -322,7 +322,6 @@ export async function listEffectiveProjectAssignees(
           ON assignments.team_id = members.team_id
         WHERE assignments.project_id = $1
           AND members.status = 'active'
-        ORDER BY lower(members.pg_username)
       `,
       [projectId]
     )

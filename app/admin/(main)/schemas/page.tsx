@@ -98,6 +98,7 @@ interface ContextMenuState {
 
 export default function SchemasPage() {
   const [schemas, setSchemas] = useState<Schema[]>([])
+  const [controlSchemaName, setControlSchemaName] = useState<string | null>(null)
   const [dbUsers, setDbUsers] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
@@ -149,6 +150,9 @@ export default function SchemasPage() {
       
       if (data.success) {
         setSchemas(data.schemas)
+        setControlSchemaName(
+          typeof data.controlSchema === "string" ? data.controlSchema : null
+        )
       } else {
         toast.error(data.error || 'Failed to fetch schemas')
       }
@@ -533,7 +537,11 @@ export default function SchemasPage() {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {filteredSchemas.map((schema) => (
+            {filteredSchemas.map((schema) => {
+              const isControlSchema =
+                controlSchemaName !== null && schema.schema_name === controlSchemaName
+
+              return (
               <div key={schema.schema_name} className="rounded-lg border">
                 {/* Schema Header */}
                 <div 
@@ -550,6 +558,11 @@ export default function SchemasPage() {
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold">{schema.schema_name}</h3>
+                        {isControlSchema && (
+                          <Badge variant="outline" className="border-primary/40 text-primary">
+                            Platform
+                          </Badge>
+                        )}
                         <Badge variant="secondary">{schema.table_count} {schema.table_count === 1 ? 'table' : 'tables'}</Badge>
                       </div>
                       {schema.description && (
@@ -573,17 +586,19 @@ export default function SchemasPage() {
                       <Eye className="h-4 w-4 mr-1" />
                       View
                     </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        openEditDialog(schema)
-                      }}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                    {schema.schema_name !== 'public' && (
+                    {!isControlSchema && (
+                      <Button 
+                        variant="ghost" 
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openEditDialog(schema)
+                        }}
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {schema.schema_name !== 'public' && !isControlSchema && (
                       <Button 
                         variant="ghost" 
                         size="sm"
@@ -648,7 +663,7 @@ export default function SchemasPage() {
                   </div>
                 )}
               </div>
-            ))}
+            )})}
           </div>
         </CardContent>
       </Card>

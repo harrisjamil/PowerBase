@@ -50,6 +50,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { SchemaTableDataEditor } from "@/components/schema-table-data-editor"
 
 
 interface Table {
@@ -103,6 +105,7 @@ export default function SchemaTablesPage() {
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedTable, setSelectedTable] = useState<Table | null>(null)
+  const [activeTable, setActiveTable] = useState<Table | null>(null)
   const [tableColumns, setTableColumns] = useState<Column[]>([])
   const [isTableDetailsOpen, setIsTableDetailsOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -156,7 +159,14 @@ export default function SchemaTablesPage() {
       const tablesData = await tablesResponse.json()
       
       if (tablesData.success) {
-        setTables(tablesData.tables)
+        const nextTables = tablesData.tables as Table[]
+        setTables(nextTables)
+        setActiveTable((current) => {
+          if (current && nextTables.some((t) => t.table_name === current.table_name)) {
+            return current
+          }
+          return nextTables[0] ?? null
+        })
       } else {
         toast.error(tablesData.error || 'Failed to fetch tables')
       }
@@ -195,10 +205,29 @@ export default function SchemaTablesPage() {
     fetchSchemaData()
   }, [schemaName])
 
-  const handleViewTable = async (table: Table) => {
+  const handleSelectTable = (table: Table) => {
+    setActiveTable(table)
+  }
+
+  const handleViewColumns = async (table: Table, event?: React.MouseEvent) => {
+    event?.stopPropagation()
     setSelectedTable(table)
     await fetchTableColumns(table.table_name)
     setIsTableDetailsOpen(true)
+  }
+
+  const handleRowCountChange = (delta: number) => {
+    if (!activeTable) return
+    setTables((current) =>
+      current.map((table) =>
+        table.table_name === activeTable.table_name
+          ? { ...table, row_count: Math.max(table.row_count + delta, 0) }
+          : table
+      )
+    )
+    setActiveTable((current) =>
+      current ? { ...current, row_count: Math.max(current.row_count + delta, 0) } : current
+    )
   }
 
   // Copy table name to clipboard
@@ -585,35 +614,42 @@ export default function SchemaTablesPage() {
         </CardContent>
       </Card>
 
-      {/* Tables List */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Tables in {schemaName}</CardTitle>
-          <CardDescription>
-            Showing {filteredTables.length} of {tables.length} tables
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {filteredTables.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <TableIcon className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p>No tables found in this schema</p>
-              <Button 
-                onClick={() => setIsCreateTableOpen(true)} 
-                variant="outline" 
-                className="mt-4 gap-2"
-              >
-                <Plus className="h-4 w-4" />
-                Create your first table
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredTables.map((table) => (
+      {/* Tables + data editor */}
+      <div className="flex min-h-[640px] flex-col gap-4 lg:flex-row">
+        <Card className="w-full shrink-0 lg:w-80">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Tables</CardTitle>
+            <CardDescription>
+              {filteredTables.length} of {tables.length} in {schemaName}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            {filteredTables.length === 0 ? (
+              <div className="px-4 pb-6 text-center text-muted-foreground">
+                <TableIcon className="mx-auto mb-3 h-10 w-10 opacity-50" />
+                <p className="text-sm">No tables found</p>
+                <Button
+                  onClick={() => setIsCreateTableOpen(true)}
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 gap-2"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create table
+                </Button>
+              </div>
+            ) : (
+              <ScrollArea className="h-[560px] px-2 pb-2">
+                <div className="space-y-2 p-1">
+                  {filteredTables.map((table) => (
                 <div
                   key={table.table_name}
-                  className="flex items-center justify-between p-4 rounded-lg border hover:shadow-md transition-shadow cursor-pointer"
-                  onClick={() => handleViewTable(table)}
+                  className={`rounded-lg border p-3 transition-colors cursor-pointer ${
+                    activeTable?.table_name === table.table_name
+                      ? "border-primary bg-primary/5"
+                      : "hover:bg-muted/50"
+                  }`}
+                  onClick={() => handleSelectTable(table)}
                 >
                   <div className="flex items-center gap-4 flex-1">
                     <TableIcon className="h-8 w-8 text-muted-foreground" />
@@ -633,54 +669,86 @@ export default function SchemaTablesPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button 
-                      variant="ghost" 
+                  <div className="mt-3 flex flex-wrap items-center gap-1">
+                    <Button
+                      variant="outline"
                       size="sm"
+                      onClick={(e) => handleViewColumns(table, e)}
+                      className="h-7 gap-1 text-xs"
+                    >
+                      <Columns className="h-3 w-3" />
+                      Columns
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
                       onClick={(e) => copyTableName(table.table_name, e)}
                       title="Copy table name"
                     >
-                      <Copy className="h-4 w-4" />
+                      <Copy className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       size="sm"
+                      className="h-7 w-7 p-0"
                       onClick={(e) => generateSelectSQL(table.table_name, e)}
                       title="Generate SELECT SQL"
                     >
-                      <FileText className="h-4 w-4" />
+                      <FileText className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       size="sm"
+                      className="h-7 w-7 p-0"
                       onClick={(e) => exportTableAsJSON(table.table_name, e)}
                       title="Export as JSON"
                     >
-                      <Download className="h-4 w-4" />
+                      <Download className="h-3 w-3" />
                     </Button>
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       size="sm"
-                      className="text-red-600 hover:text-red-700"
+                      className="h-7 w-7 p-0 text-red-600 hover:text-red-700"
                       onClick={(e) => {
                         e.stopPropagation()
                         openDeleteTableDialog(table)
                       }}
                       title="Delete table"
                     >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleViewTable(table)}>
-                      <Eye className="h-4 w-4 mr-1" />
-                      View
+                      <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
                 </div>
-              ))}
-            </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="min-w-0 flex-1">
+          {activeTable ? (
+            <SchemaTableDataEditor
+              schemaName={schemaName}
+              tableName={activeTable.table_name}
+              rowCount={activeTable.row_count}
+              tableSize={activeTable.table_size}
+              onRowCountChange={handleRowCountChange}
+            />
+          ) : (
+            <Card className="flex h-full min-h-[560px] items-center justify-center">
+              <CardContent className="py-12 text-center text-muted-foreground">
+                <TableIcon className="mx-auto mb-4 h-12 w-12 opacity-40" />
+                <p className="font-medium">Select a table to view and edit data</p>
+                <p className="mt-1 text-sm">
+                  Browse rows, insert new records, and update or delete existing rows.
+                </p>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Right Sidebar Drawer for Create Table */}
 <div

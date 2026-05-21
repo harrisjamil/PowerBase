@@ -1,6 +1,10 @@
 import type { PoolClient } from "pg"
 import type { PrincipalSession } from "@/lib/auth/principal-session"
-import { getControlSchema, getQuotedProjectsTableRef } from "@/lib/control-schema"
+import {
+  getControlSchema,
+  getQuotedProjectsTableRef,
+  isControlSchema,
+} from "@/lib/control-schema"
 import {
   canRoleAccessProjectSchema,
   ensureProjectsTable,
@@ -54,17 +58,28 @@ export async function getLinkedSuperadminForAgentPrincipal(
   return null
 }
 
+function canPrincipalAccessControlSchema(principal: PrincipalSession): boolean {
+  // Admin UI sessions (PowerBuddy login) may browse platform metadata tables.
+  return principal.principalType === "superadmin"
+}
+
 export async function getAccessibleSchemaNamesForPrincipal(
   client: PoolClient,
   principal: PrincipalSession
 ) {
+  const controlSchema = getControlSchema()
+
   if (principal.principalType === "superadmin") {
     const accessibleSchemas = await listNonProjectSchemaNames(client)
     const projectSchemas = await getAccessibleProjectSchemaNamesForRole(client, principal.email)
     for (const schemaName of projectSchemas) {
       accessibleSchemas.add(schemaName)
     }
-    accessibleSchemas.delete(getControlSchema())
+    if (canPrincipalAccessControlSchema(principal)) {
+      accessibleSchemas.add(controlSchema)
+    } else {
+      accessibleSchemas.delete(controlSchema)
+    }
     return accessibleSchemas
   }
 
@@ -72,7 +87,7 @@ export async function getAccessibleSchemaNamesForPrincipal(
     client,
     principal.username
   )
-  accessibleSchemas.delete(getControlSchema())
+  accessibleSchemas.delete(controlSchema)
   return accessibleSchemas
 }
 
@@ -81,8 +96,8 @@ export async function canPrincipalAccessSchema(
   principal: PrincipalSession,
   schemaName: string
 ) {
-  if (schemaName === getControlSchema()) {
-    return false
+  if (isControlSchema(schemaName)) {
+    return canPrincipalAccessControlSchema(principal)
   }
 
   if (principal.principalType === "superadmin") {

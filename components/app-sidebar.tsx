@@ -149,7 +149,7 @@ const data = {
   documents: [
     {
       name: "Data Library",
-      url: "#",
+      url: "/admin/data-library",
       icon: (
         <DatabaseIcon
         />

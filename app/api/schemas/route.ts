@@ -7,6 +7,7 @@ import { buildProjectSchemaName } from "@/lib/project-names"
 import {
   getControlSchema,
   getQuotedProjectsTableRef,
+  isControlSchema,
   isSafePgIdentifier,
   quotePgIdentifier,
 } from "@/lib/control-schema"
@@ -340,6 +341,17 @@ export async function PUT(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    if (isControlSchema(oldSchemaName) || (explicitNewSchemaName && isControlSchema(explicitNewSchemaName))) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `The platform control schema (${getControlSchema()}) cannot be renamed.`,
+        },
+        { status: 400 }
+      )
+    }
+
     if (body.new_name !== undefined && !explicitNewSchemaName) {
       return NextResponse.json(
         { success: false, error: "Enter a valid new schema name." },
@@ -516,6 +528,16 @@ export async function DELETE(request: NextRequest) {
     if (!schemaName || !isSafePgIdentifier(schemaName)) {
       return NextResponse.json(
         { success: false, error: "Schema name is required" },
+        { status: 400 }
+      )
+    }
+
+    if (isControlSchema(schemaName)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `The platform control schema (${getControlSchema()}) cannot be deleted.`,
+        },
         { status: 400 }
       )
     }
