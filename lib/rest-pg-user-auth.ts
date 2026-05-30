@@ -22,7 +22,10 @@ export function readRestPgCredentialsFromRequest(request: Request): RestPgCreden
 
   const envUser = process.env.POWERBASE_REST_PG_USER?.trim()
   const envPassword = process.env.POWERBASE_REST_PG_PASSWORD
-  if (envUser && envPassword !== undefined && envPassword.length > 0) {
+  const allowEnvFallback =
+    process.env.NODE_ENV !== "production" &&
+    process.env.POWERBASE_REST_ALLOW_ENV_PG?.trim() === "1"
+  if (allowEnvFallback && envUser && envPassword !== undefined && envPassword.length > 0) {
     return { user: envUser, password: envPassword }
   }
 

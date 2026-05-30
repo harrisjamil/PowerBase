@@ -4,6 +4,7 @@ import { needsPasswordUpgrade, verifyPassword, hashPassword } from "@/lib/auth/p
 import { ensureAgentsTable, readAgentEmail } from "@/lib/agents"
 import { getQuotedAgentsTableRef, getControlSchema } from "@/lib/control-schema"
 import { getPool } from "@/lib/db"
+import { enforceLoginRateLimit } from "@/lib/security/login-rate-limit"
 
 export async function POST(req: Request) {
   const client = await getPool().connect()
@@ -24,6 +25,11 @@ export async function POST(req: Request) {
 
     if (!email || !password) {
       return NextResponse.json({ error: "Email and password are required" }, { status: 400 })
+    }
+
+    const rateLimited = enforceLoginRateLimit(req, email)
+    if (rateLimited) {
+      return rateLimited
     }
 
     await ensureAgentsTable(client)

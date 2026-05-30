@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server"
-import { isAdminTotpEnrolled } from "@/lib/admin-totp"
-import { createLoginChallenge } from "@/lib/auth/login-challenge"
 import { createAdminSession, setAdminSessionCookie } from "@/lib/auth/session"
 import { getControlSchema } from "@/lib/control-schema"
 import { getPool } from "@/lib/db"
@@ -10,6 +8,10 @@ import {
   readRoleName,
   roleCanAccessAdmin,
 } from "@/lib/postgres-roles"
+import { enforceLoginRateLimit } from "@/lib/security/login-rate-limit"
+
+/** Temporary: set to true to require authenticator code after password on admin login. */
+const TOTP_LOGIN_ENABLED = false
 
 export async function POST(req: Request) {
   try {
@@ -33,6 +35,11 @@ export async function POST(req: Request) {
 
     if (!username || !password) {
       return NextResponse.json({ error: "Username and password are required" }, { status: 400 })
+    }
+
+    const rateLimited = enforceLoginRateLimit(req, username)
+    if (rateLimited) {
+      return rateLimited
     }
 
     const isValid = await authenticatePostgresRole(username, password)
@@ -61,18 +68,23 @@ export async function POST(req: Request) {
         )
       }
 
-      const totpEnrolled = await isAdminTotpEnrolled(client, role.oid)
+      // Authenticator (TOTP) step — disabled while TOTP_LOGIN_ENABLED is false
+      if (TOTP_LOGIN_ENABLED) {
+        const { isAdminTotpEnrolled } = await import("@/lib/admin-totp")
+        const { createLoginChallenge } = await import("@/lib/auth/login-challenge")
+        const totpEnrolled = await isAdminTotpEnrolled(client, role.oid)
 
-      if (totpEnrolled) {
-        return NextResponse.json({
-          success: true,
-          requiresTotp: true,
-          loginChallenge: createLoginChallenge({
-            roleOid: role.oid,
-            username: role.username,
-            controlSchema: getControlSchema(),
-          }),
-        })
+        if (totpEnrolled) {
+          return NextResponse.json({
+            success: true,
+            requiresTotp: true,
+            loginChallenge: createLoginChallenge({
+              roleOid: role.oid,
+              username: role.username,
+              controlSchema: getControlSchema(),
+            }),
+          })
+        }
       }
 
       const response = NextResponse.json({

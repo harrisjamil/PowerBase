@@ -8,6 +8,8 @@ import {
 } from "@/lib/control-schema"
 import { ensureDbBootstrap } from "@/lib/db-bootstrap-cache"
 import { getCatalogIntegration } from "@/lib/integration-catalog"
+import { getAuthSecret } from "@/lib/security/auth-secret"
+import { assertSafeOutboundHost, assertSafeWebhookUrl } from "@/lib/security/ssrf"
 
 export type IntegrationType = "oauth" | "api_key" | "webhook"
 export type IntegrationStatus = "connected" | "disconnected" | "error"
@@ -100,12 +102,7 @@ function getBootstrapKey() {
 }
 
 function getEncryptionKey() {
-  const seed =
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    process.env.NEXTAUTH_SECRET?.trim() ||
-    `${process.env.DATABASE_URL ?? ""}|${process.cwd()}|powerbase-integrations`
-  return createHash("sha256").update(seed).digest()
+  return createHash("sha256").update(getAuthSecret("powerbase-integrations")).digest()
 }
 
 function encryptSecrets(secrets: IntegrationSecrets): string {
@@ -622,6 +619,16 @@ export async function testPlatformWebhook(
     return { ok: false, error: "Webhook URL is not configured" }
   }
 
+  const urlCheck = assertSafeWebhookUrl(url)
+  if (!urlCheck.ok) {
+    return { ok: false, error: urlCheck.error }
+  }
+
+  const hostCheck = await assertSafeOutboundHost(urlCheck.url.hostname)
+  if (!hostCheck.ok) {
+    return { ok: false, error: hostCheck.error }
+  }
+
   const secrets = decryptSecrets(
     (
       await client.query<{ secrets_encrypted: string | null }>(
@@ -632,7 +639,7 @@ export async function testPlatformWebhook(
   )
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(urlCheck.url.toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

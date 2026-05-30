@@ -5,6 +5,7 @@ import { createAdminSession, setAdminSessionCookie } from "@/lib/auth/session"
 import { getControlSchema } from "@/lib/control-schema"
 import { getPool } from "@/lib/db"
 import { getPostgresRoleByOid } from "@/lib/postgres-roles"
+import { enforceTotpRateLimit } from "@/lib/security/login-rate-limit"
 
 function readCode(value: unknown): string | null {
   if (typeof value !== "string") return null
@@ -34,6 +35,11 @@ export async function POST(req: Request) {
         { error: "Login challenge and 6-digit authenticator code are required" },
         { status: 400 }
       )
+    }
+
+    const rateLimited = enforceTotpRateLimit(req, loginChallenge)
+    if (rateLimited) {
+      return rateLimited
     }
 
     const challenge = verifyLoginChallenge(loginChallenge)

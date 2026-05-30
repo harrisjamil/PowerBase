@@ -323,6 +323,13 @@ export async function roleCanAccessAdmin(
     return false
   }
 
+  const allowBootstrap =
+    process.env.NODE_ENV !== "production" ||
+    process.env.POWERBASE_ALLOW_SUPERUSER_BOOTSTRAP?.trim() === "1"
+  if (!allowBootstrap) {
+    return false
+  }
+
   const role = await getPostgresRoleByName(client, roleName)
   return Boolean(role?.is_superuser)
 }

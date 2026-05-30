@@ -35,15 +35,37 @@ function isPublicDbUserApiPath(pathname: string) {
   )
 }
 
-function isAgentReadableApiPath(pathname: string, method: string) {
-  if (method !== "GET") {
+function isPublicAuthApiPath(pathname: string) {
+  return (
+    pathname === "/api/login" ||
+    pathname === "/api/login/totp" ||
+    pathname === "/api/logout"
+  )
+}
+
+function isPublicRestApiPath(pathname: string) {
+  return /\/api\/projects\/[^/]+\/rest\/v1\//.test(pathname)
+}
+
+function isAdminOnlyApiPath(pathname: string) {
+  if (isPublicAuthApiPath(pathname) || isPublicAgentApiPath(pathname) || isPublicDbUserApiPath(pathname)) {
     return false
   }
 
   return (
-    pathname === "/api/schemas" ||
-    pathname.startsWith("/api/schemas/") ||
-    pathname === "/api/projects"
+    pathname === "/api/vm" ||
+    pathname.startsWith("/api/vm-ssh/") ||
+    pathname.startsWith("/api/admin/") ||
+    pathname === "/api/db-users" ||
+    (pathname.startsWith("/api/db-users/") && !isPublicDbUserApiPath(pathname)) ||
+    (pathname.startsWith("/api/agents") && !isPublicAgentApiPath(pathname)) ||
+    pathname.startsWith("/api/superadmins") ||
+    pathname.startsWith("/api/control-schema") ||
+    pathname.startsWith("/api/data-library") ||
+    pathname.startsWith("/api/team") ||
+    pathname.startsWith("/api/debug/") ||
+    pathname === "/api/account" ||
+    pathname === "/api/session"
   )
 }
 
@@ -88,35 +110,25 @@ export function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
-  if (pathname === "/api/agents" || pathname.startsWith("/api/agents/")) {
-    if (isPublicAgentApiPath(pathname)) {
+  if (pathname.startsWith("/api/")) {
+    if (
+      isPublicAuthApiPath(pathname) ||
+      isPublicAgentApiPath(pathname) ||
+      isPublicDbUserApiPath(pathname) ||
+      isPublicRestApiPath(pathname)
+    ) {
       return NextResponse.next()
     }
-    if (!adminSession) {
-      return unauthorizedApiResponse()
+
+    if (isAdminOnlyApiPath(pathname)) {
+      if (!adminSession) {
+        return unauthorizedApiResponse()
+      }
+      return NextResponse.next()
     }
+
+    // Project/schema and other principal-authenticated routes enforce auth in handlers.
     return NextResponse.next()
-  }
-
-  if (pathname === "/api/db-users" || pathname.startsWith("/api/db-users/")) {
-    if (isPublicDbUserApiPath(pathname)) {
-      return NextResponse.next()
-    }
-    if (!adminSession) {
-      return unauthorizedApiResponse()
-    }
-    return NextResponse.next()
-  }
-
-  if (isAgentReadableApiPath(pathname, request.method)) {
-    if (adminSession || dbUserSession) {
-      return NextResponse.next()
-    }
-    return unauthorizedApiResponse()
-  }
-
-  if (!adminSession) {
-    return unauthorizedApiResponse()
   }
 
   return NextResponse.next()
@@ -127,17 +139,6 @@ export const config = {
     "/admin/:path*",
     "/login",
     "/client/:path*",
-    "/api/account",
-    "/api/session",
-    "/api/agents",
-    "/api/agents/:path*",
-    "/api/superadmins/:path*",
-    "/api/db-users/:path*",
-    "/api/control-schema/:path*",
-    "/api/projects",
-    "/api/schemas/:path*",
-    "/api/vm",
-    "/api/vm-ssh/:path*",
-    "/api/debug/tables",
+    "/api/:path*",
   ],
 }

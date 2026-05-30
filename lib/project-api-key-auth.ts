@@ -112,7 +112,7 @@ export function canRoleRead(role: ProjectApiKeyType) {
 }
 
 export function canRoleInsert(role: ProjectApiKeyType) {
-  return role === "anon" || role === "service_role"
+  return role === "service_role"
 }
 
 export function canRoleUpdate(role: ProjectApiKeyType) {
@@ -123,13 +123,31 @@ export function canRoleDelete(role: ProjectApiKeyType) {
   return role === "service_role"
 }
 
+function parseAllowedCorsOrigins(): Set<string> {
+  const raw =
+    process.env.POWERBASE_REST_CORS_ORIGINS?.trim() ||
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    process.env.APP_URL?.trim() ||
+    ""
+  const origins = raw
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .filter(Boolean)
+  return new Set(origins)
+}
+
 export function getRestCorsHeaders(request: Request) {
-  const origin = request.headers.get("origin")
+  const origin = request.headers.get("origin")?.trim().replace(/\/$/, "") ?? null
+  const allowed = parseAllowedCorsOrigins()
+  const allowOrigin =
+    origin && allowed.has(origin) ? origin : allowed.size === 1 ? [...allowed][0] : null
+
   return {
-    "Access-Control-Allow-Origin": origin || "*",
+    ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers":
       "Authorization, Content-Type, apikey, x-client-info, prefer, accept-profile, content-profile, x-powerbase-pg-user, x-powerbase-pg-password",
     "Access-Control-Max-Age": "86400",
+    ...(allowOrigin ? { Vary: "Origin" } : {}),
   }
 }

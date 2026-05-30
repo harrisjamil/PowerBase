@@ -1,5 +1,9 @@
-/** Use COOKIE_SECURE=0 when serving production over plain HTTP (e.g. IP:3000). */
+/** Secure cookies in production; COOKIE_SECURE=0 is ignored in production. */
 export function useSecureSessionCookies() {
+  if (process.env.NODE_ENV === "production") {
+    return true
+  }
+
   const override = process.env.COOKIE_SECURE?.trim().toLowerCase()
   if (override === "0" || override === "false") {
     return false
@@ -7,5 +11,5 @@ export function useSecureSessionCookies() {
   if (override === "1" || override === "true") {
     return true
   }
-  return process.env.NODE_ENV === "production"
+  return false
 }

@@ -16,6 +16,7 @@ import {
 } from "@/lib/control-schema"
 import { ensureDbBootstrap } from "@/lib/db-bootstrap-cache"
 import { ensureProjectsTable } from "@/lib/projects"
+import { getAuthSecret } from "@/lib/security/auth-secret"
 
 export type ProjectApiKeyType = "anon" | "service_role"
 
@@ -55,12 +56,7 @@ function getBootstrapKey(client: PoolClient, suffix: string) {
 }
 
 function getEncryptionKey() {
-  const seed =
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    process.env.NEXTAUTH_SECRET?.trim() ||
-    `${process.env.DATABASE_URL ?? ""}|${process.cwd()}|powerbase-project-api-keys`
-  return createHash("sha256").update(seed).digest()
+  return createHash("sha256").update(getAuthSecret("powerbase-project-api-keys")).digest()
 }
 
 function encryptKey(value: string): string {
@@ -97,7 +93,7 @@ function buildProjectJwt(projectRef: string, role: ProjectApiKeyType, signingSec
     ref: projectRef,
     role,
     iat: now,
-    exp: now + 60 * 60 * 24 * 365 * 10,
+    exp: now + 60 * 60 * 24 * 365,
   }
   const encodedHeader = base64UrlJson(header)
   const encodedPayload = base64UrlJson(payload)

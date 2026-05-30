@@ -11,6 +11,7 @@ import {
 } from "@/lib/auth/db-user-session"
 import { readDbUsername } from "@/lib/db-users"
 import { pgUserHasAnyProjectAccess } from "@/lib/teams"
+import { enforceLoginRateLimit } from "@/lib/security/login-rate-limit"
 
 export async function POST(req: Request) {
   let body: unknown
@@ -32,6 +33,11 @@ export async function POST(req: Request) {
       { error: "Username and password are required" },
       { status: 400 }
     )
+  }
+
+  const rateLimited = enforceLoginRateLimit(req, username)
+  if (rateLimited) {
+    return rateLimited
   }
 
   const isValid = await authenticatePostgresRole(username, password)

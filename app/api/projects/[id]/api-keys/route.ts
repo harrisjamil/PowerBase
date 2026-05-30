@@ -9,7 +9,7 @@ import {
   type ProjectApiKeyType,
 } from "@/lib/project-api-keys"
 import { ensureProjectsTable, getProjectRecordByLookup } from "@/lib/projects"
-import { canPrincipalAccessSchema } from "@/lib/principal-access"
+import { canPrincipalManageProject } from "@/lib/principal-access"
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
@@ -49,14 +49,10 @@ export async function GET(
       )
     }
 
-    const canAccess = await canPrincipalAccessSchema(
-      client,
-      auth.session,
-      project.schema_name
-    )
-    if (!canAccess) {
+    const canManage = canPrincipalManageProject(auth.session, project.creator_role_name)
+    if (!canManage) {
       return NextResponse.json(
-        { success: false, error: "You do not have access to this project" },
+        { success: false, error: "Only project owners can view API keys" },
         { status: 403 }
       )
     }
@@ -128,14 +124,10 @@ export async function POST(
       )
     }
 
-    const canAccess = await canPrincipalAccessSchema(
-      client,
-      auth.session,
-      project.schema_name
-    )
-    if (!canAccess) {
+    const canManage = canPrincipalManageProject(auth.session, project.creator_role_name)
+    if (!canManage) {
       return NextResponse.json(
-        { success: false, error: "You do not have access to this project" },
+        { success: false, error: "Only project owners can regenerate API keys" },
         { status: 403 }
       )
     }

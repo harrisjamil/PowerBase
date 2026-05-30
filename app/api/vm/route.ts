@@ -8,6 +8,10 @@ import {
   readVmLocalSettings,
   patchVmLocalSettings,
 } from "@/lib/vm-local-settings";
+import {
+  validatePgColumnConstraints,
+  validatePgDataType,
+} from "@/lib/security/pg-ddl";
 
 function assertPgRoleName(name: unknown): { ok: true; quoted: string } | { ok: false; error: string } {
   if (typeof name !== "string" || !/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(name)) {
@@ -426,9 +430,19 @@ export async function POST(request: Request) {
             throw new Error(`Invalid column name: ${col.name}`);
           }
 
-          let def = `"${col.name}" ${col.type}`;
-          if (col.constraints && col.constraints.trim()) {
-            def += ` ${col.constraints}`;
+          const typeCheck = validatePgDataType(col.type)
+          if (!typeCheck.ok) {
+            throw new Error(typeCheck.error)
+          }
+
+          const constraintsCheck = validatePgColumnConstraints(col.constraints)
+          if (!constraintsCheck.ok) {
+            throw new Error(constraintsCheck.error)
+          }
+
+          let def = `"${col.name}" ${typeCheck.sqlType}`;
+          if (constraintsCheck.sqlConstraints) {
+            def += ` ${constraintsCheck.sqlConstraints}`;
           }
           return def;
         })

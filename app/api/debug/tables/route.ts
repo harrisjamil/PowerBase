@@ -3,6 +3,10 @@ import { getAdminSessionFromRequest, unauthorizedJson } from "@/lib/auth/session
 import { getPool } from '@/lib/db'
 
 export async function GET(request: Request) {
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ success: false, error: "Not found" }, { status: 404 })
+  }
+
   if (!getAdminSessionFromRequest(request)) {
     return unauthorizedJson()
   }
@@ -11,7 +15,6 @@ export async function GET(request: Request) {
     const client = await getPool().connect()
     
     try {
-      // Query to see all tables across all schemas
       const query = `
         SELECT 
           n.nspname as schema_name,
@@ -44,13 +47,12 @@ export async function GET(request: Request) {
       throw error
     }
     
-  } catch (error: any) {
+  } catch (error) {
     console.error('Database error:', error)
     return NextResponse.json(
       { 
         success: false, 
         error: 'Failed to fetch tables',
-        details: error.message 
       },
       { status: 500 }
     )

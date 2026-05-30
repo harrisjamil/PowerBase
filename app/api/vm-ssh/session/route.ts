@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { requireAdminRequest } from "@/lib/auth/session"
 import { closeSshSession, createSshShellSession } from "@/lib/vm-ssh-sessions"
+import { assertSafeOutboundHost, isCustomSshHostAllowed } from "@/lib/security/ssrf"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -34,7 +35,23 @@ export async function POST(request: Request) {
     body.username.trim().length > 0 &&
     typeof body.password === "string"
   ) {
+    if (!isCustomSshHostAllowed()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Custom SSH hosts are disabled in production. Set VM_SSH_ALLOW_CUSTOM_HOST=1 to override.",
+        },
+        { status: 403 }
+      )
+    }
+
     const host = body.host.trim()
+    const hostCheck = await assertSafeOutboundHost(host)
+    if (!hostCheck.ok) {
+      return NextResponse.json({ ok: false, error: hostCheck.error }, { status: 400 })
+    }
+
     const port =
       typeof body.port === "number" && Number.isFinite(body.port)
         ? body.port

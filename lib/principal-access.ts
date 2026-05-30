@@ -110,3 +110,20 @@ export async function canPrincipalAccessSchema(
 
   return canPgUserAccessProjectSchema(client, principal.username, schemaName)
 }
+
+function getPrincipalRoleName(principal: PrincipalSession): string {
+  return principal.principalType === "superadmin" ? principal.email : principal.username
+}
+
+export function canPrincipalManageProject(
+  principal: PrincipalSession,
+  creatorRoleName: string | null
+): boolean {
+  if (principal.principalType === "superadmin") {
+    return true
+  }
+  if (!creatorRoleName) {
+    return false
+  }
+  return creatorRoleName.toLowerCase() === getPrincipalRoleName(principal).toLowerCase()
+}

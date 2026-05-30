@@ -1,8 +1,9 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto"
+import { createHmac, timingSafeEqual } from "node:crypto"
 import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
 import { useSecureSessionCookies } from "@/lib/auth/cookie-secure"
 import { getControlSchema } from "@/lib/control-schema"
+import { getAuthSecret } from "@/lib/security/auth-secret"
 
 const SESSION_COOKIE_NAME = "powerbase_admin_session"
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12
@@ -15,18 +16,8 @@ export type AdminSession = {
   exp: number
 }
 
-function getFallbackSecret() {
-  const seed = `${process.env.DATABASE_URL ?? ""}|${process.cwd()}|powerbase-admin-session`
-  return createHash("sha256").update(seed).digest("base64url")
-}
-
 function getSessionSecret() {
-  return (
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    process.env.NEXTAUTH_SECRET?.trim() ||
-    getFallbackSecret()
-  )
+  return getAuthSecret("powerbase-admin-session")
 }
 
 function encodePayload(payload: AdminSession): string {

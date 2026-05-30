@@ -10,17 +10,15 @@ import {
   quotePgIdentifier,
 } from "@/lib/control-schema"
 import { ensureDbBootstrap } from "@/lib/db-bootstrap-cache"
+import { getAuthSecret } from "@/lib/security/auth-secret"
 
 const TOTP_ISSUER = "PowerBase Admin"
 const PENDING_TTL_MS = 10 * 60 * 1000
+/** Allow ±1 step (30s) for clock skew between server and authenticator app. */
+const TOTP_VERIFY_OPTIONS = { epochTolerance: 1 } as const
 
 function getEncryptionKey() {
-  const seed =
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    process.env.NEXTAUTH_SECRET?.trim() ||
-    `${process.env.DATABASE_URL ?? ""}|${process.cwd()}|powerbase-totp`
-  return createHash("sha256").update(seed).digest()
+  return createHash("sha256").update(getAuthSecret("powerbase-totp")).digest()
 }
 
 function encryptSecret(secret: string): string {
@@ -218,7 +216,7 @@ export async function confirmAdminTotpEnrollment(
     return { ok: false as const, error: "Failed to read enrollment. Please start again." }
   }
 
-  const verification = await verify({ token: code, secret })
+  const verification = await verify({ token: code, secret, ...TOTP_VERIFY_OPTIONS })
   if (!verification.valid) {
     return { ok: false as const, error: "Invalid verification code." }
   }
@@ -267,9 +265,15 @@ export async function verifyAdminTotpCode(
   if (!row) return false
 
   const secret = decryptSecret(row.secret_encrypted)
-  if (!secret) return false
+  if (!secret) {
+    console.error(
+      "TOTP decrypt failed for role_oid=%s — AUTH_SECRET/SESSION_SECRET likely changed since enrollment",
+      roleOid
+    )
+    return false
+  }
 
-  const verification = await verify({ token: code, secret })
+  const verification = await verify({ token: code, secret, ...TOTP_VERIFY_OPTIONS })
   return verification.valid
 }
 

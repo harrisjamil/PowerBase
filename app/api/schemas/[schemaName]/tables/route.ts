@@ -3,6 +3,10 @@ import { requirePrincipalRequest } from "@/lib/auth/principal-session"
 import { getPool } from '@/lib/db'
 import { isSafePgIdentifier, quotePgIdentifier } from "@/lib/control-schema"
 import { canPrincipalAccessSchema } from "@/lib/principal-access"
+import {
+  validatePgColumnDefault,
+  validatePgDataType,
+} from "@/lib/security/pg-ddl"
 
 type CreateTableColumn = {
   column_name: string
@@ -176,20 +180,32 @@ export async function POST(
       let createTableSQL = `CREATE TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(table_name)} (\n`
       
       const columnDefinitions = columns.map((col) => {
-        let def = `  ${quotePgIdentifier(col.column_name)} ${String(col.data_type).toUpperCase()}`
-        
+        const typeCheck = validatePgDataType(String(col.data_type))
+        if (!typeCheck.ok) {
+          throw new Error(typeCheck.error)
+        }
+
+        const defaultCheck = validatePgColumnDefault(
+          typeof col.column_default === "string" ? col.column_default : null
+        )
+        if (!defaultCheck.ok) {
+          throw new Error(defaultCheck.error)
+        }
+
+        let def = `  ${quotePgIdentifier(col.column_name)} ${typeCheck.sqlType}`
+
         if (!col.is_nullable) {
           def += ` NOT NULL`
         }
-        
-        if (col.column_default && col.column_default !== '') {
-          def += ` DEFAULT ${col.column_default}`
+
+        if (defaultCheck.sqlDefault) {
+          def += ` DEFAULT ${defaultCheck.sqlDefault}`
         }
-        
+
         if (col.is_primary_key) {
           def += ` PRIMARY KEY`
         }
-        
+
         return def
       })
       

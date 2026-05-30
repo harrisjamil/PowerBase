@@ -3,6 +3,10 @@ import { requirePrincipalRequest } from "@/lib/auth/principal-session"
 import { getPool } from '@/lib/db'
 import { isSafePgIdentifier, quotePgIdentifier } from "@/lib/control-schema"
 import { canPrincipalAccessSchema } from "@/lib/principal-access"
+import {
+  validatePgColumnDefault,
+  validatePgDataType,
+} from "@/lib/security/pg-ddl"
 
 type ColumnMutationBody = {
   column_name?: unknown
@@ -142,14 +146,28 @@ export async function POST(
         )
       }
 
-      let alterQuery = `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ADD COLUMN ${quotePgIdentifier(column_name)} ${String(data_type).toUpperCase()}`
-      
+      const typeCheck = validatePgDataType(data_type)
+      if (!typeCheck.ok) {
+        client.release()
+        return NextResponse.json({ success: false, error: typeCheck.error }, { status: 400 })
+      }
+
+      const defaultCheck = validatePgColumnDefault(
+        typeof column_default === "string" ? column_default : null
+      )
+      if (!defaultCheck.ok) {
+        client.release()
+        return NextResponse.json({ success: false, error: defaultCheck.error }, { status: 400 })
+      }
+
+      let alterQuery = `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ADD COLUMN ${quotePgIdentifier(column_name)} ${typeCheck.sqlType}`
+
       if (is_nullable === false) {
         alterQuery += ` NOT NULL`
       }
-      
-      if (column_default && column_default !== '') {
-        alterQuery += ` DEFAULT ${column_default}`
+
+      if (defaultCheck.sqlDefault) {
+        alterQuery += ` DEFAULT ${defaultCheck.sqlDefault}`
       }
       
       console.log('Adding column with SQL:', alterQuery)
@@ -235,8 +253,14 @@ export async function PUT(
       
       // Change data type if provided
       if (data_type) {
+        const typeCheck = validatePgDataType(data_type)
+        if (!typeCheck.ok) {
+          await client.query('ROLLBACK')
+          client.release()
+          return NextResponse.json({ success: false, error: typeCheck.error }, { status: 400 })
+        }
         await client.query(
-          `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} TYPE ${String(data_type).toUpperCase()}`
+          `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} TYPE ${typeCheck.sqlType}`
         )
       }
       
@@ -256,8 +280,16 @@ export async function PUT(
       // Change default value
       if (column_default !== undefined) {
         if (column_default && column_default !== '') {
+          const defaultCheck = validatePgColumnDefault(
+            typeof column_default === "string" ? column_default : null
+          )
+          if (!defaultCheck.ok) {
+            await client.query('ROLLBACK')
+            client.release()
+            return NextResponse.json({ success: false, error: defaultCheck.error }, { status: 400 })
+          }
           await client.query(
-            `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} SET DEFAULT ${column_default}`
+            `ALTER TABLE ${quotePgIdentifier(schemaName)}.${quotePgIdentifier(tableName)} ALTER COLUMN ${quotePgIdentifier(currentColumnName)} SET DEFAULT ${defaultCheck.sqlDefault}`
           )
         } else {
           await client.query(

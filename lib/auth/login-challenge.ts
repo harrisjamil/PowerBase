@@ -1,5 +1,6 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto"
+import { createHmac, timingSafeEqual } from "node:crypto"
 import { getControlSchema } from "@/lib/control-schema"
+import { getAuthSecret } from "@/lib/security/auth-secret"
 
 const CHALLENGE_MAX_AGE_SECONDS = 60 * 5
 
@@ -11,18 +12,8 @@ export type LoginChallenge = {
   exp: number
 }
 
-function getFallbackSecret() {
-  const seed = `${process.env.DATABASE_URL ?? ""}|${process.cwd()}|powerbase-login-challenge`
-  return createHash("sha256").update(seed).digest("base64url")
-}
-
 function getChallengeSecret() {
-  return (
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    process.env.NEXTAUTH_SECRET?.trim() ||
-    getFallbackSecret()
-  )
+  return getAuthSecret("powerbase-login-challenge")
 }
 
 function encodePayload(payload: LoginChallenge): string {
